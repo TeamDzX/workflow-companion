@@ -1,0 +1,22 @@
+name: Bug report
+description: Something the companion did wrong, or didn't do
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you asked Claude to do, and what happened instead.
+    validations: { required: true }
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `npx -y @opticell/workflow-companion status`
+      description: It shows no task content. Remove anything you'd rather not share.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "Companion 1.5.1 · WorkFlow 5.2.3 on Mac · Windows 11 · Claude Code / Claude Desktop"
+    validations: { required: true }

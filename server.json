@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.TeamDzX/workflow-companion",
+  "title": "WorkFlow Companion",
+  "description": "Claude on Windows or Linux works in your WorkFlow tasks, notes and projects via your own iCloud.",
+  "repository": { "url": "https://github.com/TeamDzX/workflow-companion", "source": "github" },
+  "websiteUrl": "https://www.opticell-limited.com/companion",
+  "version": "1.5.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/TeamDzX/workflow-companion/releases/download/v1.5.0/WorkFlow.mcpb",
+      "fileSha256": "cd19f458b4eb894f4ad313f7c3f0adf5803314b0e67254a9debdee1bca7a7d08",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}
