@@ -3,10 +3,10 @@
 [![npm](https://img.shields.io/npm/v/@opticell/workflow-companion?label=npm)](https://www.npmjs.com/package/@opticell/workflow-companion)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.TeamDzX%2Fworkflow--companion-4F46E5)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.TeamDzX/workflow-companion)
 
-> **This repository** is where WorkFlow Companion is released and supported:
-> downloads (`WorkFlow.mcpb` for Claude Desktop) are on the
+> **This repository** is WorkFlow Companion's home: the source (`src/index.js`,
+> MIT licensed), downloads (`WorkFlow.mcpb` for Claude Desktop) on the
 > [Releases](https://github.com/TeamDzX/workflow-companion/releases) page,
-> and bugs and requests go in [Issues](https://github.com/TeamDzX/workflow-companion/issues).
+> and bugs and requests in [Issues](https://github.com/TeamDzX/workflow-companion/issues).
 > The package itself installs from npm. On a Mac, use the open-source
 > [workflow-agent-bridge](https://github.com/TeamDzX/workflow-agent-bridge) instead.
 > All of Opticell's free tools for Claude: [opticell-mcp](https://github.com/TeamDzX/opticell-mcp).
@@ -169,3 +169,15 @@ The same 29 tools as the Mac's Agent Bridge MCP server, including:
 `workflow_draft_email` and `workflow_state`.
 
 © Opticell Limited · <https://www.opticell-limited.com/companion>
+
+## Source and licence
+
+`src/index.js` is the whole server: one file, Node 18 or later, no
+dependencies. It is MIT licensed (see `LICENSE`). The published npm package
+is the same file with WorkFlow's CloudKit API token filled in at build time
+(the token is not a secret: it only lets a signed-in user reach their own
+data). Run from source, `setup` asks for it with `--api-token`.
+
+The `Dockerfile` runs the server over stdio. MCP directories use it to check
+that the server starts and lists its tools, which it does without signing in.
+
