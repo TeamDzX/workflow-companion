@@ -644,7 +644,35 @@ function mentionsMe(text) {
 // the owner asking (the same rule as the Mac's wake trigger).
 function addressedToMe(t, sharedProjects) {
   if (t.project && sharedProjects.has(t.project)) return false;
-  return (t.comments || []).slice(-3).some(c => !String(c.authorID || "").startsWith("agent.") && mentionsMe(c.text));
+  return !!addressingComment(t);
+}
+
+// Assistant hand-offs allowed in a row before a person must write again
+// (1.6, matching WorkFlow 5.3.1). Enough for "Claude, check this" -> "Jarvis,
+// done" -> a reply; never enough for two assistants to wake each other forever.
+const MAX_AGENT_HOPS = 3;
+const isAgentID = id => String(id || "").startsWith("agent.");
+
+// The comment asking this agent for something, if any. A person's @Name
+// counts in any of the last three comments. Another assistant's counts only
+// as the newest comment, and only while the run of assistant comments with an
+// @mention since a person last wrote is within MAX_AGENT_HOPS. Before 1.6 an
+// assistant's comment never counted, so Claude's "@Jarvis, brief above" woke
+// nothing.
+function addressingComment(t) {
+  const comments = t.comments || [];
+  // The newest request wins: a fresh assistant hand-off must count even when
+  // an older @mention from a person is still among the last three.
+  const last = comments[comments.length - 1];
+  if (last && isAgentID(last.authorID) && last.authorID !== AGENT.authorID && mentionsMe(last.text)) {
+    let hops = 0;
+    for (const c of [...comments].reverse()) {
+      if (!isAgentID(c.authorID)) break;
+      if (/(^|[^A-Za-z0-9_])@[A-Za-z]/.test(c.text || "")) hops++;
+    }
+    if (hops <= MAX_AGENT_HOPS) return last;
+  }
+  return comments.slice(-3).reverse().find(c => !isAgentID(c.authorID) && mentionsMe(c.text)) || null;
 }
 
 function showNote(n) {
@@ -1267,7 +1295,7 @@ function wakeItems(snap) {
   const personal = c => !String(c.authorID || "").startsWith("agent.");
   const items = rows.map(t => {
     const byPeople = (t.comments || []).filter(personal);
-    const trigger = mine(t) ? byPeople.slice(-1)[0] : byPeople.slice(-3).reverse().find(c => mentionsMe(c.text));
+    const trigger = mine(t) ? byPeople.slice(-1)[0] : addressingComment(t);
     const why = mine(t) ? `assigned to ${AGENT.name}` : `@${AGENT.name} in a comment`;
     return { key: `task:${t.id}`, sig: trigger ? `${trigger.id || ""}@${trigger.timestamp || ""}` : "assigned",
       kind: "task", id: t.id, title: t.title, project: t.project || "", why };
@@ -1313,6 +1341,8 @@ Do the work, then report back in the task's own thread so it reaches the user's 
   workflow_comment           what you did, or what you need
   workflow_complete_task     only when the task is plainly finished
 For a [note], answer with workflow_reply_note, or workflow_convert_note if it describes work worth tracking.
+
+Only @mention another assistant (such as @Claude) when you need it to act: an @mention wakes it. A thank-you or an FYI must not include one.
 
 How to write into a thread (it is read on a phone): one reply per request, about six short lines at most, leading with what changed or what you need. Anything longer goes in a note (workflow_create_note) or an attached file (workflow_attach_file), linked from the reply. Never paste logs or code into a comment. If you need something from the user, ask in the comment and leave it open.
 
