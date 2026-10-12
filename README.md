@@ -144,8 +144,11 @@ npx -y @opticell/workflow-companion wake-on
   shows later in `workflow_state`.
 - **Reads come from a snapshot.** WorkFlow publishes it a few seconds after each
   change, so a read straight after a write can lag slightly.
-- **Files don't travel yet.** Attaching a file, or adding a new version of a
-  document, has to be done in WorkFlow itself.
+- **Files go through your iCloud (1.6).** Attaching a file, filing a document
+  into a project or adding a new version uploads the file to your own iCloud;
+  WorkFlow 5.3 or later on the answering Mac or iPhone attaches it and then
+  deletes the uploaded copy. Up to 50 MB a file. An older WorkFlow ignores the
+  upload and reports the file as missing.
 - **The token is a password.** `~/.workflow-companion/token.txt` opens your
   WorkFlow data in iCloud. Apple replaces it on every request, and the
   companion saves each replacement at once. Several Claude sessions on one
