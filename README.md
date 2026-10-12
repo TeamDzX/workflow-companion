@@ -42,7 +42,12 @@ many devices are on.
 1. In WorkFlow on an iPhone or iPad: **Settings → Windows Companion → Answer
    the Companion**. On a Mac: **Settings → Agent Bridge**, then the Agent
    Bridge and **Cloud Bridge** switches.
-2. On this computer, with Node 18 or later:
+2. Install **Node.js 18 or later** (LTS) if `node -v` doesn't show it:
+   Windows `winget install OpenJS.NodeJS.LTS -e`, Mac `brew install node`,
+   Linux your package manager, or the installer from <https://nodejs.org>.
+   Then close and reopen the terminal (and restart Claude Code) so `node` and
+   `npx` are found; otherwise you'll see "node is not recognized".
+3. In a normal terminal window:
 
    ```sh
    npx -y @opticell/workflow-companion setup
@@ -50,11 +55,19 @@ many devices are on.
 
    It opens <https://companion.opticell-limited.com> to sign in with the
    Apple Account WorkFlow uses on your iPhone or Mac, then asks you to paste the token that
-   page shows.
-3. Add it to Claude:
+   page shows. It asks questions, so it can't run from Claude Code's `!`
+   prompt or another non-interactive shell; there, pass `--web-token <token>`
+   and `--name <name>`.
+4. Add it to Claude:
 
    ```sh
    claude mcp add --scope user workflow -- npx -y @opticell/workflow-companion
+   ```
+
+   On **Windows**, `npx` is a script, so Claude Code needs `cmd /c` in front:
+
+   ```sh
+   claude mcp add --scope user workflow -- cmd /c npx -y @opticell/workflow-companion
    ```
 
    `--scope user` makes it available in every project on this computer.
