@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "1.6.0" };
+const SERVER_INFO = { name: "workflow", version: "1.6.1" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -1018,7 +1018,10 @@ async function handle(request) {
     try {
       // In iCloud mode every tool reads the Mac's latest snapshot first
       // (task lookups need it too); workflow_state reports on its own.
-      if (CLOUD && tool.name !== "workflow_state" && tool.name !== "workflow_ping") await cloud.load();
+      if (CLOUD && tool.name !== "workflow_state" && tool.name !== "workflow_ping") {
+        await cloud.load();
+        reportPresence().catch(() => {});
+      }
       return ok({ content: [{ type: "text", text: String(await tool.handler(args)) }], isError: false });
     } catch (e) {
       return ok({ content: [{ type: "text", text: `${e.message || e}` }], isError: true });
@@ -1068,11 +1071,18 @@ async function cloudStateText() {
   try { lastKeepAlive = fs.readFileSync(KEEPALIVE_LOG, "utf8").trim().split("\n").pop(); } catch (_) {}
   if (lastKeepAlive) lines.push(`keep-alive  last run ${lastKeepAlive}`);
   lines.push(`waking      ${cfg.wakeEnabled ? `on — Claude Code starts by itself when @${AGENT.name} work arrives (log ${WAKE.log})` : "off — work waits until Claude here is asked (turn on: workflow-companion wake-on)"}`);
+  lines.push(`version     ${await versionLine()}`);
   lines.push(`name        ${AGENT.name} — assign tasks to "${AGENT.name}", or write @${AGENT.name} in a comment or note`);
   try {
     await cloud.load(true);
     lines.push(`answering   ${cloud.macLine()}`);
     lines.push(`snapshot    ${cloudSnap ? `${cloudSnap.tasks.length} tasks, ${(cloudSnap.notes || []).length} notes, generated ${local(cloudSnap.generatedAt)}` : "none yet — is the companion switched on in WorkFlow's Settings (Windows Companion on iPhone and iPad, Cloud Bridge on a Mac)?"}`);
+    try {
+      const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 90 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
+      for (const c of await companionPresence()) {
+        lines.push(`companion   ${c.name}: ${c.version ? `${c.version} on ${c.host || "?"}, checked in ${ago(c.aliveAt)}${c.waking ? ", waking on" : ""}` : "hasn't reported a version (older than 1.6.1)"}`);
+      }
+    } catch (_) { /* presence is a nicety */ }
     const clash = cloudSnap ? nameClash(AGENT.name) : null;
     if (clash) lines.push(`WARNING     ${clash.host} also answers to "${AGENT.name}": both would act on @${AGENT.name}. Run setup with another --name.`);
   } catch (e) {
@@ -1169,7 +1179,8 @@ async function setup() {
   } else {
     console.log(`\nKeep-alive: ${installSchedule()}. It keeps the sign-in from lapsing while Claude isn't running.`);
   }
-  console.log(`\nNow add it to Claude Code:\n  claude mcp add --scope user workflow -- npx -y @opticell/workflow-companion`);
+  await reportPresence(true);
+  console.log(`\nNow add it to Claude Code (@latest, so each new session picks up the newest release):\n  ${claudeCodeCommand()}`);
   if (argv.includes("--wake") && !argv.includes("--no-schedule") && !process.env.WF_NO_SCHEDULE) {
     console.log("");
     await wakeSetup(true);
@@ -1199,7 +1210,9 @@ async function keepAlive() {
   const at = new Date().toISOString();
   try {
     await cloud.call("public/users/caller");
-    logKeepAlive(`${at} ok`);
+    await reportPresence();
+    const update = await selfUpdate();
+    logKeepAlive(`${at} ok${/^updated|failed/.test(update) ? `; ${update}` : ""}`);
     return 0;
   } catch (e) {
     logKeepAlive(`${at} ${e instanceof SignInNeeded ? "SIGN-IN ENDED" : "failed"}: ${String(e.message).split("\n")[0]}`);
@@ -1396,6 +1409,7 @@ async function wake() {
   try {
     try { await cloud.load(true); }
     catch (e) { logWake(`${e instanceof SignInNeeded ? "SIGN-IN ENDED" : "iCloud failed"}: ${String(e.message).split("\n")[0]}`); return 1; }
+    await reportPresence();
     if (!cloudSnap) return 0;
     if (blockingClash()) { logWake(`not waking: "${AGENT.name}" is also Claude on another computer`); return 0; }
     const st = readJSON(WAKE.state, null) || {};
@@ -1450,6 +1464,7 @@ async function wake() {
     return 1;
   } finally {
     try { fs.unlinkSync(WAKE.lock); } catch (_) {}
+    try { const update = await selfUpdate(); if (/^updated|failed/.test(update)) logWake(update); } catch (_) {}
   }
 }
 
@@ -1539,9 +1554,192 @@ async function wakeSetup(on) {
   return 0;
 }
 
+// ------------------------------------------------------------------ versions (1.6.1)
+
+// Each companion says which version it runs, and keeps itself current.
+//
+// Presence: a "companion-<name>" record of the Mac's own status type
+// (BridgeStatus: aliveAt, appVersion, device, pollSeconds, all already in the
+// Production schema), so WorkFlow's Who's Bridged and other companions can
+// show "Jarvis · 1.6.1 · checked in 4 min ago".
+//
+// Latest release: npm's registry entry for the package, which is JSON and is
+// by definition what was last published. Checked at most every 6 hours.
+//
+// Self-update: the scheduled jobs run a saved copy that npm never touches.
+// When a newer release is out, that copy is replaced by the published file,
+// after checking it against npm's own sha512 and that Node can parse it.
+// Claude Code stays current by being registered with @latest.
+const RELEASE_URL = "https://registry.npmjs.org/@opticell/workflow-companion/latest";
+const RELEASE_CHECK_MS = 6 * 3600 * 1000;
+const PRESENCE_EVERY_MS = 10 * 60 * 1000;
+const SAVED_SCRIPT = path.join(COMPANION.home, "workflow-companion.js");
+
+// true when version a is newer than b ("1.10.0" > "1.9.3").
+function newerVersion(a, b) {
+  const pa = String(a || "").split(".").map(n => parseInt(n, 10) || 0);
+  const pb = String(b || "").split(".").map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  return false;
+}
+
+function updateConfig(change) {
+  if (!fs.existsSync(CP.config)) return;
+  const cfg = readJSON(CP.config, {}) || {};
+  change(cfg);
+  saveAtomic(CP.config, JSON.stringify(cfg, null, 2));
+}
+
+// The newest published release, from npm (cached for 6 hours in config.json).
+async function latestRelease(force = false) {
+  const cached = (readJSON(CP.config, {}) || {}).latestRelease || null;
+  if (!force && cached && Date.now() - cached.checkedAt < RELEASE_CHECK_MS) return cached;
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    const res = await fetch(RELEASE_URL, { signal: ctl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return cached;
+    const j = await res.json();
+    if (!j || !j.version) return cached;
+    const info = { version: j.version, tarball: j.dist && j.dist.tarball, integrity: j.dist && j.dist.integrity, checkedAt: Date.now() };
+    updateConfig(cfg => { cfg.latestRelease = info; });
+    return info;
+  } catch (_) {
+    return cached;
+  }
+}
+
+// The version a saved copy of this file declares.
+function versionOfScript(file) {
+  try {
+    const m = fs.readFileSync(file, "utf8").match(/const SERVER_INFO = \{ name: "workflow", version: "([0-9.]+)" \};/);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+
+// package/index.js out of an npm tarball (gzip'd ustar). No dependencies.
+function indexFromTarball(gz) {
+  const tar = require("zlib").gunzipSync(gz);
+  const text = (from, len) => tar.toString("utf8", from, from + len).replace(/\0[\s\S]*$/, "");
+  for (let off = 0; off + 512 <= tar.length;) {
+    if (tar.subarray(off, off + 512).every(b => b === 0)) break;
+    const name = text(off, 100), prefix = text(off + 345, 155);
+    const size = parseInt(text(off + 124, 12).trim(), 8) || 0;
+    const start = off + 512;
+    if ((prefix ? `${prefix}/${name}` : name) === "package/index.js") return tar.subarray(start, start + size);
+    off = start + Math.ceil(size / 512) * 512;
+  }
+  return null;
+}
+
+// Replaces the saved copy the scheduled jobs run, if a newer release is out.
+// Returns "updated from X to Y", "current", "off", or a reason it didn't.
+async function selfUpdate({ force = false } = {}) {
+  const cfg = readJSON(CP.config, null);
+  if (!cfg) return "not signed in";
+  if (cfg.autoUpdate === false && !force) return "off";
+  if (!fs.existsSync(SAVED_SCRIPT)) return "nothing scheduled";
+  const saved = versionOfScript(SAVED_SCRIPT);
+  const rel = await latestRelease(force);
+  if (!rel || !rel.version) return "couldn't reach npm";
+  if (!newerVersion(rel.version, saved)) return "current";
+  try {
+    if (!rel.tarball || !/^sha512-/.test(rel.integrity || "")) throw new Error("npm gave no tarball or checksum");
+    const res = await fetch(rel.tarball);
+    if (!res.ok) throw new Error(`download failed (HTTP ${res.status})`);
+    const gz = Buffer.from(await res.arrayBuffer());
+    const sum = "sha512-" + require("crypto").createHash("sha512").update(gz).digest("base64");
+    if (sum !== rel.integrity) throw new Error("checksum didn't match npm's");
+    const code = indexFromTarball(gz);
+    if (!code) throw new Error("no index.js in the package");
+    // A .js name: Node won't --check a file with any other extension.
+    const tmp = path.join(COMPANION.home, `workflow-companion.${process.pid}.new.js`);
+    fs.writeFileSync(tmp, code);
+    const check = require("child_process").spawnSync(process.execPath, ["--check", tmp], { encoding: "utf8" });
+    if (check.status !== 0) { try { fs.unlinkSync(tmp); } catch (_) {} throw new Error("the new file didn't parse"); }
+    fs.renameSync(tmp, SAVED_SCRIPT);
+    return `updated from ${saved || "?"} to ${rel.version}`;
+  } catch (e) {
+    return `update to ${rel.version} failed: ${e.message}`;
+  }
+}
+
+// "I'm here, this version": at most every 10 minutes unless forced.
+async function reportPresence(force = false) {
+  if (!CLOUD) return;
+  const cfg = readJSON(CP.config, null);
+  if (!cfg || !fs.existsSync(CP.token)) return;
+  if (!force && cfg.presenceAt && Date.now() - cfg.presenceAt < PRESENCE_EVERY_MS) return;
+  const slug = AGENT.authorID.slice("agent.".length);
+  try {
+    await cloud.call("private/records/modify", { zoneID: { zoneName: COMPANION.zone }, operations: [{ operationType: "forceReplace", record: {
+      recordType: "BridgeStatus", recordName: `companion-${slug}`,
+      fields: {
+        aliveAt: { value: Date.now(), type: "TIMESTAMP" },
+        appVersion: { value: SERVER_INFO.version, type: "STRING" },
+        device: { value: os.hostname(), type: "STRING" },
+        // Seconds between wake checks; 0 when waking is off.
+        pollSeconds: { value: cfg.wakeEnabled ? WAKE.everyMinutes * 60 : 0, type: "INT64" },
+      },
+    } }] });
+    updateConfig(c => { c.presenceAt = Date.now(); });
+  } catch (_) { /* reported next time */ }
+}
+
+// Every companion's last check-in, from their presence records.
+async function companionPresence() {
+  const names = companionRoster().map(e => e.name);
+  if (!names.includes(AGENT.name)) names.push(AGENT.name);
+  const slugs = names.map(n => agentFor(n).authorID.slice("agent.".length));
+  const got = await cloud.lookup(slugs.map(s => `companion-${s}`));
+  return names.map((name, i) => {
+    const r = got[`companion-${slugs[i]}`];
+    return r ? { name, version: cloud.field(r, "appVersion"), host: cloud.field(r, "device"),
+                 aliveAt: cloud.field(r, "aliveAt"), waking: (cloud.field(r, "pollSeconds") || 0) > 0 } : { name };
+  });
+}
+
+// One line for status and workflow_state: this version, and whether it's the latest.
+async function versionLine() {
+  const rel = await latestRelease();
+  const auto = (readJSON(CP.config, {}) || {}).autoUpdate === false ? "auto-update off" : "auto-update on";
+  if (!rel) return `${SERVER_INFO.version} (couldn't check npm for a newer one; ${auto})`;
+  return newerVersion(rel.version, SERVER_INFO.version)
+    ? `${SERVER_INFO.version}, UPDATE AVAILABLE: ${rel.version}. Run "npx -y @opticell/workflow-companion@latest update" (${auto})`
+    : `${SERVER_INFO.version}, the latest (${auto})`;
+}
+
+// How Claude Code should run the companion: @latest, so every new session
+// picks up the newest release. Windows needs cmd /c in front of npx.
+function claudeCodeCommand() {
+  return `claude mcp add --scope user workflow -- ${process.platform === "win32" ? "cmd /c " : ""}npx -y @opticell/workflow-companion@latest`;
+}
+
+// `workflow-companion update`: refresh the saved copy now, say the version,
+// and how to keep Claude Code current.
+async function updateNow() {
+  const result = await selfUpdate({ force: true });
+  const rel = await latestRelease();
+  console.log(`Latest release: ${rel ? rel.version : "unknown (couldn't reach npm)"}`);
+  console.log(`Scheduled jobs' copy: ${result === "nothing scheduled" ? "none (waking and keep-alive aren't scheduled here)" : result}`);
+  await reportPresence(true);
+  console.log(`\nClaude Code runs whatever its registration says. To always get the latest:\n  claude mcp remove workflow -s user\n  ${claudeCodeCommand()}`);
+  return 0;
+}
+
+// `workflow-companion auto-update on|off`.
+function setAutoUpdate(on) {
+  if (!fs.existsSync(CP.config)) { console.error(signInHelp("Not signed in yet.")); return 2; }
+  updateConfig(cfg => { cfg.autoUpdate = on; });
+  console.log(on ? "Auto-update is on: the scheduled jobs update themselves when a new release is out."
+                 : "Auto-update is off. Update by hand with: npx -y @opticell/workflow-companion@latest update");
+  return 0;
+}
+
 function printConfig() {
   if (CLOUD) {
-    process.stdout.write(`Claude Code:\n  claude mcp add --scope user workflow -- npx -y @opticell/workflow-companion\n\nClaude Desktop → Settings → Developer → Edit Config, add:\n${JSON.stringify({ mcpServers: { workflow: { command: "npx", args: ["-y", "@opticell/workflow-companion"] } } }, null, 2)}\n`);
+    process.stdout.write(`Claude Code:\n  ${claudeCodeCommand()}\n\nClaude Desktop → Settings → Developer → Edit Config, add:\n${JSON.stringify({ mcpServers: { workflow: { command: "npx", args: ["-y", "@opticell/workflow-companion@latest"] } } }, null, 2)}\n`);
     return;
   }
   const cfg = { mcpServers: { workflow: { command: "node", args: [__filename], env: { WF_BRIDGE: ROOT } } } };
@@ -1555,6 +1753,8 @@ const HELP = `WorkFlow companion ${SERVER_INFO.version}
   workflow-companion setup      sign this computer in to iCloud for WorkFlow (--name, --takeover, --no-browser)
   workflow-companion status     which device answers, how fresh is the snapshot
   workflow-companion keepalive  renew the sign-in (what the scheduled job runs)
+  workflow-companion update     update the scheduled jobs' copy now, and say how to keep Claude Code current
+  workflow-companion auto-update on|off   whether the scheduled jobs update themselves (on by default)
   workflow-companion wake-on    start a Claude Code session on its own when @name work arrives
                                 (--allow-tools, --model, --workdir, --max-minutes, --claude, --skip-existing)
   workflow-companion wake-off   stop doing that; work waits until you ask
@@ -1570,6 +1770,8 @@ else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);
 else if (verb === "setup") setup().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
 else if (verb === "status") cloudStateText().then(t => console.log(t), e => { console.error(e.message || e); process.exitCode = 1; });
 else if (verb === "keepalive") keepAlive().then(c => { process.exitCode = c; });
+else if (verb === "update") updateNow().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+else if (verb === "auto-update") process.exitCode = setAutoUpdate(argv[argv.indexOf("auto-update") + 1] !== "off");
 else if (verb === "wake") wake().then(c => { process.exitCode = c; }, e => { logWake(`failed: ${e.message || e}`); process.exitCode = 1; });
 else if (verb === "wake-on" || verb === "wake-off") wakeSetup(verb === "wake-on").then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
 else if (verb === "signout") {

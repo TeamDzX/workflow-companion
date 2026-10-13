@@ -137,6 +137,22 @@ npx -y @opticell/workflow-companion wake-on
   found. `--skip-existing` treats what's already queued as handled.
 - The log is `~/.workflow-companion/wake.log`. `wake-off` stops it all.
 
+## Staying up to date
+
+- **Claude Code** runs whatever its registration names. Register it with
+  `@latest` (setup prints the exact line) and every new session uses the
+  newest release.
+- **The scheduled jobs** (keep-alive, waking) run a saved copy that npm never
+  touches, so they update themselves. At most every 6 hours they read npm's
+  entry for the package (`registry.npmjs.org/@opticell/workflow-companion/latest`).
+  When it's newer, they download the release, check it against npm's sha512
+  checksum and that Node can parse it, then swap it in. Turn this off with
+  `auto-update off`, and update by hand with `update`.
+- **Its version is reported.** Every ten minutes or so while it runs, each
+  companion writes its version, computer and check-in time to your iCloud.
+  WorkFlow 5.3.2 shows them in Settings → Agent Bridge → Who's Bridged, and
+  `status` lists every companion's version.
+
 ## Commands
 
 | | |
@@ -145,6 +161,12 @@ npx -y @opticell/workflow-companion wake-on
 | `workflow-companion setup` | Signs this computer in. Takes `--web-token` to skip the prompt. |
 | `workflow-companion status` | Which device answers, how fresh the snapshot is, any receipts that arrived late. |
 | `workflow-companion keepalive` | Renews the sign-in. The scheduled job runs this. |
+| `workflow-companion update` | Updates the scheduled jobs' copy to the latest release now, and shows how to keep Claude Code on `@latest`. |
+| `workflow-companion auto-update on\|off` | Whether the scheduled jobs update themselves (on by default). |
+| `workflow-companion wake-on` | Starts a Claude Code session on its own when work for its name arrives. See above. |
+| `workflow-companion wake-off` | Stops that. Work waits until you ask Claude here. |
+| `workflow-companion wake` | One check of the queue. The scheduled job runs this. |
+| `workflow-companion signout` | Deletes the sign-in, cached data and both scheduled jobs. |
 | `workflow-companion wake-on` | Starts a Claude Code session on its own when work for its name arrives. See above. |
 | `workflow-companion wake-off` | Stops that. Work waits until you ask Claude here. |
 | `workflow-companion wake` | One check of the queue. The scheduled job runs this. |

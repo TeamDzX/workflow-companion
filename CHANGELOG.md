@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.1
+- **Reports its version.** Every ten minutes or so while it runs, each
+  companion writes its version, computer and check-in time to your iCloud.
+  `status` lists every companion's version; WorkFlow 5.3.2 shows them in
+  Who's Bridged.
+- **Stays up to date.** The scheduled jobs check npm's entry for the package
+  at most every 6 hours and update their saved copy, after checking it
+  against npm's sha512 checksum and that Node can parse it. `update` does it
+  now; `auto-update off` turns it off. Setup and the README register Claude
+  Code with `@latest`, so new sessions start on the newest release.
+
 ## 1.6.0
 - **Files travel through your iCloud.** Attach a file, file a document into a
   project, or add a new version, up to 50 MB a file. Needs WorkFlow 5.3 on the
