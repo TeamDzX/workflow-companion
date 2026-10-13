@@ -50,7 +50,7 @@ many devices are on.
 3. In a normal terminal window:
 
    ```sh
-   npx -y @opticell/workflow-companion setup
+   npx -y @opticell/workflow-companion@latest setup
    ```
 
    It opens <https://companion.opticell-limited.com> to sign in with the
@@ -61,13 +61,13 @@ many devices are on.
 4. Add it to Claude:
 
    ```sh
-   claude mcp add --scope user workflow -- npx -y @opticell/workflow-companion
+   claude mcp add --scope user workflow -- npx -y @opticell/workflow-companion@latest
    ```
 
    On **Windows**, `npx` is a script, so Claude Code needs `cmd /c` in front:
 
    ```sh
-   claude mcp add --scope user workflow -- cmd /c npx -y @opticell/workflow-companion
+   claude mcp add --scope user workflow -- cmd /c npx -y @opticell/workflow-companion@latest
    ```
 
    `--scope user` makes it available in every project on this computer.
