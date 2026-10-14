@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "1.6.1" };
+const SERVER_INFO = { name: "workflow", version: "1.6.2" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -675,6 +675,25 @@ function addressingComment(t) {
   return comments.slice(-3).reverse().find(c => !isAgentID(c.authorID) && mentionsMe(c.text)) || null;
 }
 
+// On a task assigned to this agent: the newest comment from another
+// assistant that @mentions it, since the last person wrote, within the hop
+// limit. Unlike addressingComment it needn't be the very last comment, so an
+// assistant's follow-up without a mention doesn't change the wake signature.
+function assignedHandoff(t) {
+  const comments = t.comments || [];
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const c = comments[i];
+    if (!isAgentID(c.authorID)) return null;
+    if (c.authorID === AGENT.authorID || !mentionsMe(c.text)) continue;
+    let hops = 0;
+    for (let j = i; j >= 0 && isAgentID(comments[j].authorID); j--) {
+      if (/(^|[^A-Za-z0-9_])@[A-Za-z]/.test(comments[j].text || "")) hops++;
+    }
+    return hops <= MAX_AGENT_HOPS ? c : null;
+  }
+  return null;
+}
+
 function showNote(n) {
   const lines = [n.title || "(untitled)", `id ${n.id}`];
   if (n.isPinned) lines.push("pinned");
@@ -1308,7 +1327,13 @@ function wakeItems(snap) {
   const personal = c => !String(c.authorID || "").startsWith("agent.");
   const items = rows.map(t => {
     const byPeople = (t.comments || []).filter(personal);
-    const trigger = mine(t) ? byPeople.slice(-1)[0] : addressingComment(t);
+    // On an assigned task, another assistant's @mention counts too (1.6.2):
+    // only a person's comment did before, so opticell → Jarvis hand-offs on
+    // tasks assigned to Jarvis woke nothing. The newer of the two wins.
+    const trigger = mine(t)
+      ? [byPeople.slice(-1)[0], assignedHandoff(t)].filter(Boolean)
+          .sort((x, y) => String(y.timestamp || "").localeCompare(String(x.timestamp || "")))[0]
+      : addressingComment(t);
     const why = mine(t) ? `assigned to ${AGENT.name}` : `@${AGENT.name} in a comment`;
     return { key: `task:${t.id}`, sig: trigger ? `${trigger.id || ""}@${trigger.timestamp || ""}` : "assigned",
       kind: "task", id: t.id, title: t.title, project: t.project || "", why };

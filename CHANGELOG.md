@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.2
+- **Hand-offs to an assigned task wake the assistant.** An @mention from
+  another assistant on a task assigned to this one now starts a session, as
+  a person's comment always did. Before, only a person's comment could re-wake
+  it, so an assistant-to-assistant hand-off on an assigned task waited until
+  someone prompted it by hand. The three-hop limit still applies, and an
+  assistant's comment without an @mention still wakes nothing. Found and
+  diagnosed by Jarvis.
+
 ## 1.6.1
 - **Reports its version.** Every ten minutes or so while it runs, each
   companion writes its version, computer and check-in time to your iCloud.
