@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.7.0
+Ideas from OpenRig, adapted for WorkFlow 5.4.
+- **Hand-offs.** `workflow_hand_off` gives a task to another assistant or a
+  person: it becomes the assignee, and a comment says so. Handing to an
+  assistant @mentions it, which starts its session.
+- **Watches.** `workflow_watch` sets a task aside and wakes this assistant
+  at a set time to look again ("tell me when the server's back up"). Give
+  minutes, or a time as ISO-8601 or HH:MM. A watch fires once; set it again
+  to keep watching. Needs WorkFlow 5.4.
+- **House rules.** The user's standing instructions for every assistant,
+  set in WorkFlow (Settings → Agent Bridge → House Rules). They head
+  `workflow_queue`, are in every wake prompt, and `workflow_house_rules`
+  returns them.
+- **What it's doing.** The companion reports whether it's working on a
+  task, idle, or needs attention (a usage limit, a sign-in, Claude Code
+  missing, a session stopped at the time limit). WorkFlow 5.4 shows this in
+  Who's Bridged, and `status` lists it. Until the WorkFlow 5.4 schema is
+  live in iCloud, the presence record goes without it.
+
 ## 1.6.2
 - **Hand-offs to an assigned task wake the assistant.** An @mention from
   another assistant on a task assigned to this one now starts a session, as
