@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.0
+The companion now does useful work on its computer by itself.
+- **Monitors.** Website, port, disk, process, file and (yours only) command
+  checks every few minutes, without using Claude. A change is posted on a
+  task and can wake a session.
+- **Approvals.** An assistant asks to run one exact command; you reply
+  "approve CODE" from your phone, and it runs once. Off until you switch it
+  on with `workflow-companion approvals on`.
+- **Session reports.** A short report attached to the task after each
+  session.
+- **Sign-in ended.** Said on the computer itself, once, with the fix.
+- **Inbox folder.** Files dropped in become tasks.
+- **Notifications** on the computer.
+- **One-line install** for Windows, Mac and Linux.
+
 ## 1.7.0
 Ideas from OpenRig, adapted for WorkFlow 5.4.
 - **Hand-offs.** `workflow_hand_off` gives a task to another assistant or a

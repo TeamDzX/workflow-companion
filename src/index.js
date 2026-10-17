@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "1.7.0" };
+const SERVER_INFO = { name: "workflow", version: "1.8.0" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -426,6 +426,7 @@ const cloud = (() => {
     if (err) throw err;
     setOwn(own().concat({ name, op: command.op, at: new Date().toISOString() }));
     countSent();
+    logOp(command);
     // A push usually brings the Mac within seconds; failing that it looks
     // every 15 s. Check often at first, then wait out a little over two rounds.
     const schedule = quick ? [2000, 3000, 5000] : [2000, 2000, 2000, 2000, 2000, 5000, 5000, 5000, 5000, 5000, 5000];
@@ -1091,6 +1092,83 @@ const TOOLS = [
     handler: () => houseRules(snapshot()) || "No house rules set.",
   },
   {
+    name: "workflow_monitor",
+    description: "Checks that run on this computer every few minutes without using Claude, and wake you only when something changes: a website (http), a port (host:port), free disk space (disk, min_free_gb), a running process, or a file changing. Changes are posted on the task you name. action: add | list | remove. Command monitors can only be added by the person at this computer.",
+    inputSchema: { type: "object", properties: {
+      action: { type: "string", enum: ["add", "list", "remove"] }, name: { type: "string" },
+      type: { type: "string", enum: ["http", "port", "disk", "process", "file"] }, target: { type: "string", description: "URL, host:port, folder, process name or file" },
+      task: { type: "string", description: "where changes are posted" }, every: { type: "number", description: "minutes, 2 or more (default 5)" },
+      wake: { type: "boolean", description: "start a session when it changes" }, min_free_gb: { type: "number" }, expect_text: { type: "string", description: "http: text the page must contain" } },
+      required: ["action"] },
+    handler: async a => {
+      if (a.action === "list") { const l = loadMonitors(); return l.length ? l.map(monitorLine).join("\n") : "No monitors on this computer."; }
+      if (a.action === "remove") { removeMonitor(a.name); return `Removed “${a.name}”.`; }
+      const t = a.task ? findTask(a.task) : null;
+      const m = addMonitor({ name: a.name, type: a.type, target: a.target, every: a.every, wake: a.wake, task: t ? t.id : "", taskTitle: t ? t.title : "",
+        minFreeGB: a.min_free_gb, expectText: a.expect_text }, "assistant");
+      const r = await checkMonitor(m);
+      return `Monitor “${m.name}” added on ${os.hostname()}: ${r.ok ? "OK" : "FAILED"} now (${r.detail}). Checked every ${m.every} min; schedule: ${ensureTick()}.`;
+    },
+  },
+  {
+    name: "workflow_request_approval",
+    description: "Ask the user to approve one command before it runs on this computer (restart a service, install an update, delete old backups). Posts the exact command on the task with a code; when the user replies \"approve CODE\" you're woken, and workflow_run_approved runs exactly that command. Only the user's reply counts. Off unless the user has switched approvals on here.",
+    inputSchema: { type: "object", properties: { task: { type: "string" }, action: { type: "string", description: "what it does, in plain words" }, command: { type: "string", description: "the exact shell command" }, cwd: { type: "string" } }, required: ["task", "action", "command"] },
+    handler: async a => {
+      const cfg = readJSON(CP.config, {}) || {};
+      if (!CLOUD || !cfg.approvalsEnabled) throw new Error("Approvals are off on this computer. Only the person here can switch them on, with: workflow-companion approvals on");
+      const t = findTask(a.task);
+      const shared = new Set((snapshot().projects || []).filter(p => p.isShared).map(p => p.name));
+      if (t.project && shared.has(t.project)) throw new Error("Not on a task in a shared project: someone else could answer it.");
+      const command = String(a.command).trim();
+      if (!command || command.length > 1000) throw new Error("Give the exact command (up to 1000 characters).");
+      const code = approvalCode();
+      const now = Date.now();
+      const r = await send("add_comment", { taskID: t.id, text: `🔐 Approval needed on ${os.hostname()}: ${String(a.action).slice(0, 200)}\nCommand: ${command}${a.cwd ? `\nIn: ${a.cwd}` : ""}\nReply “approve ${code}” to run it, or “decline ${code}”. Expires in 24 h.` });
+      if (r.status !== "applied" && r.status !== "pending") return receiptText(r);
+      const list = loadApprovals();
+      list.push({ code, taskID: t.id, taskTitle: t.title, action: String(a.action).slice(0, 200), command, cwd: a.cwd || "", requestedAt: new Date(now).toISOString(), expiresAt: new Date(now + APPROVAL_TTL_MS).toISOString(), status: "pending" });
+      saveApprovals(list);
+      ensureTick();
+      return `Asked for approval ${code}. You'll be woken when the user answers; nothing runs before that. Stop here for now.`;
+    },
+  },
+  {
+    name: "workflow_check_approval",
+    description: "Whether the user has approved or declined an approval request (by its code).",
+    inputSchema: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
+    handler: a => {
+      refreshApprovals(snapshot());
+      const x = findApproval(a.code);
+      const when = x.decidedAt ? ` by ${x.decidedBy}, ${local(x.decidedAt)}` : "";
+      return `${x.code}: ${x.status}${when}\n  ${x.action}\n  command: ${x.command}${x.ranAt ? `\n  ran ${local(x.ranAt)}: exit ${x.result.exit}` : ""}`;
+    },
+  },
+  {
+    name: "workflow_run_approved",
+    description: "Run a command the user has approved, exactly as it was when they approved it. Once only. Returns its exit code and output; report the result in the task's thread.",
+    inputSchema: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
+    handler: a => {
+      const cfg = readJSON(CP.config, {}) || {};
+      if (!cfg.approvalsEnabled) throw new Error("Approvals are off on this computer.");
+      refreshApprovals(snapshot());
+      const x = findApproval(a.code);
+      if (x.ranAt) throw new Error(`${x.code} already ran (${local(x.ranAt)}). Ask again for another run.`);
+      if (x.status !== "approved") throw new Error(`${x.code} is ${x.status}, not approved.`);
+      if (Date.now() > Date.parse(x.expiresAt)) throw new Error(`${x.code} has expired.`);
+      // Marked before running: a crash mid-run must not allow a second run.
+      const list = loadApprovals();
+      const row = list.find(y => y.code === x.code);
+      row.ranAt = new Date().toISOString();
+      saveApprovals(list);
+      const result = runApproved(x);
+      row.result = { exit: result.exit, seconds: result.seconds };
+      saveApprovals(list);
+      logWake(`approval ${x.code}: ran "${x.command}" → exit ${result.exit}`);
+      return `Ran ${x.code} on ${os.hostname()} (${result.seconds} s): exit ${result.exit}\n${result.output || "(no output)"}`;
+    },
+  },
+  {
     name: "workflow_ping",
     description: "Confirm the app is watching the bridge (round-trips one command).",
     inputSchema: { type: "object", properties: {} },
@@ -1174,6 +1252,12 @@ async function cloudStateText() {
   if (lastKeepAlive) lines.push(`keep-alive  last run ${lastKeepAlive}`);
   lines.push(`waking      ${cfg.wakeEnabled ? `on — Claude Code starts by itself when @${AGENT.name} work arrives (log ${WAKE.log})` : "off — work waits until Claude here is asked (turn on: workflow-companion wake-on)"}`);
   lines.push(`version     ${await versionLine()}`);
+  const mons = loadMonitors();
+  if (mons.length) lines.push(`monitors    ${mons.length}${mons.some(m => m.state && !m.state.ok) ? `, FAILING: ${mons.filter(m => m.state && !m.state.ok).map(m => m.name).join(", ")}` : ", all OK"} (workflow-companion monitor list)`);
+  const pending = loadApprovals().filter(a => a.status === "pending");
+  lines.push(`approvals   ${cfg.approvalsEnabled ? `on${pending.length ? `, ${pending.length} waiting: ${pending.map(a => a.code).join(", ")}` : ""}` : "off (workflow-companion approvals on)"}`);
+  if (cfg.inboxFolder) lines.push(`inbox       ${cfg.inboxFolder}`);
+  lines.push(`notices     notifications ${cfg.notifications === false ? "off" : "on"}, session reports ${cfg.reports === false ? "off" : "on"}`);
   lines.push(`name        ${AGENT.name} — assign tasks to "${AGENT.name}", or write @${AGENT.name} in a comment or note`);
   try {
     await cloud.load(true);
@@ -1319,8 +1403,16 @@ async function keepAlive() {
     return 0;
   } catch (e) {
     logKeepAlive(`${at} ${e instanceof SignInNeeded ? "SIGN-IN ENDED" : "failed"}: ${String(e.message).split("\n")[0]}`);
+    if (e instanceof SignInNeeded) signInEnded();
     return 1;
   }
+}
+
+// The iCloud sign-in has ended (#5). With no sign-in the companion can't
+// reach iCloud to tell the phone, so it says so on this computer; WorkFlow
+// shows the companion going quiet in Who's Bridged.
+function signInEnded() {
+  notify(`WorkFlow companion (${AGENT.name})`, `The iCloud sign-in on ${os.hostname()} has ended, so ${AGENT.name} can't see new work. Run: npx -y @opticell/workflow-companion@latest setup`, "signin-ended");
 }
 
 function logKeepAlive(line) {
@@ -1470,7 +1562,7 @@ Do the work, then report back in the task's own thread so it reaches the user's 
   workflow_complete_task     only when the task is plainly finished
 For a [note], answer with workflow_reply_note, or workflow_convert_note if it describes work worth tracking.
 
-Only @mention another assistant (such as @Claude) when you need it to act: an @mention wakes it. A thank-you or an FYI must not include one. When the work itself should move to another assistant or a person, use workflow_hand_off. To check on something later ("tell me when it's back up"), use workflow_watch rather than waiting: you'll be woken at that time, and a watch fires once, so re-arm it if you're still waiting.
+Only @mention another assistant (such as @Claude) when you need it to act: an @mention wakes it. A thank-you or an FYI must not include one. When the work itself should move to another assistant or a person, use workflow_hand_off. To check on something later ("tell me when it's back up"), use workflow_watch rather than waiting: you'll be woken at that time, and a watch fires once, so re-arm it if you're still waiting. To keep an eye on a website, port, disk or process, use workflow_monitor: it checks without you and wakes you only on a change. To run a command on this computer that you aren't allowed to run yourself, ask with workflow_request_approval and stop; you'll be woken when the user answers.
 
 How to write into a thread (it is read on a phone): one reply per request, about six short lines at most, leading with what changed or what you need. Anything longer goes in a note (workflow_create_note) or an attached file (workflow_attach_file), linked from the reply. Never paste logs or code into a comment. If you need something from the user, ask in the comment and leave it open.
 
@@ -1528,18 +1620,47 @@ async function wake() {
   if (!CLOUD) { console.error("wake is for the companion (iCloud mode). On a Mac, the app's own wake trigger does this: wf wake install."); return 2; }
   const cfg = readJSON(CP.config, null);
   if (!cfg) { console.error(signInHelp("Not signed in yet.")); return 2; }
+  // 1.8: monitors, the inbox folder and approvals run on every tick, with
+  // waking on or off, and never wait behind a running session.
+  const extras = loadMonitors().length || inboxFolder(cfg) || loadApprovals().some(a => a.status === "pending");
+  if (!cfg.wakeEnabled && !extras) return 0;
+  if (extras) {
+    try { await cloud.load(true); await reportPresence(); await tickExtras(); }
+    catch (e) {
+      logWake(`${e instanceof SignInNeeded ? "SIGN-IN ENDED" : "iCloud failed"}: ${String(e.message).split("\n")[0]}`);
+      if (e instanceof SignInNeeded) signInEnded();
+      return 1;
+    }
+  }
   if (!cfg.wakeEnabled) return 0;
   const maxMinutes = cfg.wakeMaxMinutes || WAKE.maxMinutes;
   if (!takeWakeLock(maxMinutes)) return 0;   // a session is already running
   try {
-    try { await cloud.load(true); }
-    catch (e) { logWake(`${e instanceof SignInNeeded ? "SIGN-IN ENDED" : "iCloud failed"}: ${String(e.message).split("\n")[0]}`); return 1; }
-    await reportPresence();
+    try { if (!extras) await cloud.load(true); }
+    catch (e) {
+      logWake(`${e instanceof SignInNeeded ? "SIGN-IN ENDED" : "iCloud failed"}: ${String(e.message).split("\n")[0]}`);
+      if (e instanceof SignInNeeded) signInEnded();
+      return 1;
+    }
+    if (!extras) await reportPresence();
     if (!cloudSnap) return 0;
     if (blockingClash()) { logWake(`not waking: "${AGENT.name}" is also Claude on another computer`); return 0; }
     const st = readJSON(WAKE.state, null) || {};
     st.seen = st.seen || {}; st.attempts = st.attempts || {};
     const items = wakeItems(cloudSnap);
+    // 1.8: an answered approval wakes the session that asked, once.
+    for (const a of loadApprovals()) {
+      if ((a.status === "approved" || a.status === "declined") && !a.wokeAt) {
+        items.push({ key: `approval:${a.code}`, sig: String(a.decisionComment || a.decidedAt), kind: "task", id: a.taskID, title: a.taskTitle,
+          project: "", why: `your approval request ${a.code} was ${a.status} by ${a.decidedBy}${a.status === "approved" ? "; run it with workflow_run_approved" : ""}` });
+      }
+    }
+    // 1.8: a monitor that changed and is set to wake.
+    const monitorWakes = readJSON(X.monitorWakes, []) || [];
+    if (monitorWakes.length) {
+      for (const w of monitorWakes) items.push({ key: w.key, sig: w.key, kind: "task", id: w.taskID, title: w.title, project: "", why: w.why });
+      try { fs.unlinkSync(X.monitorWakes); } catch (_) {}
+    }
     // Forget what has left the queue, so it can wake again if it comes back.
     const live = new Set(items.map(i => i.key));
     for (const k of Object.keys(st.seen)) if (!live.has(k)) { delete st.seen[k]; delete st.attempts[k]; }
@@ -1553,6 +1674,13 @@ async function wake() {
     for (const i of fresh) { prior[i.key] = st.seen[i.key]; st.seen[i.key] = i.sig; }
     saveAtomic(WAKE.state, JSON.stringify(st));
     logWake(`wake: ${fresh.map(i => `${i.kind} "${i.title}" (${i.why})`).join("; ")}`);
+    notify(`${AGENT.name}: new work`, fresh.map(i => i.title).join(" · "));
+    const approvalsInSession = fresh.filter(i => i.key.startsWith("approval:")).map(i => i.key.slice(9));
+    if (approvalsInSession.length) {
+      const list = loadApprovals();
+      for (const a of list) if (approvalsInSession.includes(a.code)) a.wokeAt = new Date().toISOString();
+      saveApprovals(list);
+    }
 
     const before = sentCount();
     const started = Date.now();
@@ -1562,6 +1690,7 @@ async function wake() {
     const wrote = sentCount() > before;
     const tail = r.out.trim().split("\n").slice(-3).join(" ").slice(0, 300);
     logWake(`session exited ${r.code} after ${Math.round((Date.now() - started) / 1000)} s${r.timedOut ? " (time limit)" : ""}${wrote ? "" : ", wrote nothing"}: ${tail}`);
+    await attachReport({ items: fresh, started, r, wrote }).catch(() => {});
     if (r.code === 0 && !r.timedOut) {
       for (const i of fresh) delete st.attempts[i.key];
       saveAtomic(WAKE.state, JSON.stringify(st));
@@ -1592,6 +1721,7 @@ async function wake() {
       message = `My session on ${os.hostname()} ended early (exit ${r.code}) after starting work. What I finished is recorded above. Mention @${AGENT.name} again to pick this up.`;
     }
     if (first) { try { await send("add_comment", { taskID: first.id, text: message }); } catch (e) { logWake(`couldn't post the failure: ${e.message}`); } }
+    notify(`${AGENT.name} needs attention`, message.slice(0, 200));
     return 1;
   } finally {
     try { fs.unlinkSync(WAKE.lock); } catch (_) {}
@@ -1682,6 +1812,444 @@ async function wakeSetup(on) {
   const scheduled = argv.includes("--no-schedule") || process.env.WF_NO_SCHEDULE
     ? `not scheduled (--no-schedule); run "workflow-companion wake" yourself` : installWakeSchedule();
   console.log(`Waking: ${scheduled}.\n  Claude Code: ${claudeBin}\n  Allowed without asking: ${cfg.wakeAllowedTools || "mcp__workflow"} (change with --allow-tools)\n  Log: ${WAKE.log}`);
+  return 0;
+}
+
+// ------------------------------------------------------------------ 1.8: the PC's own jobs
+//
+// Things the companion does on this computer by itself, every scheduled tick
+// (the same 2-minute job as waking), without spending any Claude usage:
+//   monitors      checks that wake Claude only when something changes
+//   approvals     a command an assistant may run once the user says so
+//   inbox folder  files dropped in a folder become tasks
+//   notifications a toast on this computer when something needs a person
+// and, after each session, a report attached to the task.
+
+const X = {
+  monitors: path.join(COMPANION.home, "monitors.json"),
+  approvals: path.join(COMPANION.home, "approvals.json"),
+  monitorWakes: path.join(COMPANION.home, "monitor-wakes.json"),
+  ops: path.join(COMPANION.home, "session-ops.log"),
+  tickLock: path.join(COMPANION.home, "tick.lock"),
+  notified: path.join(COMPANION.home, "notified.json"),
+};
+const MONITOR_TYPES = ["http", "port", "disk", "process", "file", "command"];
+// What an assistant may set up itself. A command monitor runs a shell command
+// every few minutes, so only the person at this computer can add one.
+const ASSISTANT_MONITOR_TYPES = ["http", "port", "disk", "process", "file"];
+const APPROVAL_TTL_MS = 24 * 3600 * 1000;
+const RUN_LIMIT_MS = 10 * 60 * 1000;
+
+const localISO = d => new Date(d).toLocaleString();
+function ensureHome() { fs.mkdirSync(COMPANION.home, { recursive: true }); }
+
+// ---- operation log (for session reports)
+
+function logOp(command) {
+  try {
+    ensureHome();
+    const line = { at: new Date().toISOString(), op: command.op, taskID: command.taskID || "", what: String(command.text || command.title || command.displayName || command.pinnedNote || "").slice(0, 90) };
+    fs.appendFileSync(X.ops, JSON.stringify(line) + "\n");
+    // Keep the last 500 lines.
+    const lines = fs.readFileSync(X.ops, "utf8").split("\n").filter(Boolean);
+    if (lines.length > 600) fs.writeFileSync(X.ops, lines.slice(-500).join("\n") + "\n");
+  } catch (_) {}
+}
+function opsSince(t) {
+  try {
+    return fs.readFileSync(X.ops, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)).filter(o => Date.parse(o.at) >= t);
+  } catch (_) { return []; }
+}
+
+// ---- desktop notifications (#8)
+
+// Shows a notification on this computer. Best effort: a scheduled job with
+// nobody signed in has no desktop to show it on. WF_NOTIFY_LOG is for tests.
+function notify(title, body, onceKey) {
+  const cfg = readJSON(CP.config, {}) || {};
+  if (cfg.notifications === false) return;
+  if (onceKey) {
+    const seen = readJSON(X.notified, {}) || {};
+    if (seen[onceKey] && Date.now() - seen[onceKey] < 12 * 3600 * 1000) return;
+    seen[onceKey] = Date.now();
+    try { ensureHome(); saveAtomic(X.notified, JSON.stringify(seen)); } catch (_) {}
+  }
+  title = String(title).slice(0, 80); body = String(body).slice(0, 240);
+  if (process.env.WF_NOTIFY_LOG) { try { fs.appendFileSync(process.env.WF_NOTIFY_LOG, `${title} | ${body}\n`); } catch (_) {} return; }
+  const { spawn } = require("child_process");
+  const opts = { detached: true, stdio: "ignore", windowsHide: true, env: Object.assign({}, process.env, { WF_T: title, WF_B: body }) };
+  try {
+    if (process.platform === "win32") {
+      const ps = "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;" +
+        "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);" +
+        "$x = $t.GetElementsByTagName('text'); $x.Item(0).AppendChild($t.CreateTextNode($env:WF_T)) > $null; $x.Item(1).AppendChild($t.CreateTextNode($env:WF_B)) > $null;" +
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($t))";
+      spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps], opts).unref();
+    } else if (process.platform === "darwin") {
+      spawn("osascript", ["-e", "display notification (system attribute \"WF_B\") with title (system attribute \"WF_T\")"], opts).unref();
+    } else {
+      spawn("notify-send", [title, body], opts).unref();
+    }
+  } catch (_) {}
+}
+
+// ---- monitors (#1)
+
+function loadMonitors() { return readJSON(X.monitors, []) || []; }
+function saveMonitors(list) { ensureHome(); saveAtomic(X.monitors, JSON.stringify(list, null, 2)); }
+
+// One check. Resolves { ok, detail, fingerprint? }; never throws.
+async function checkMonitor(m) {
+  const target = String(m.target || "");
+  try {
+    if (m.type === "http") {
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 15000);
+      try {
+        const res = await fetch(target, { signal: ctl.signal, redirect: "follow" });
+        const text = m.expectText ? await res.text() : "";
+        if (res.status >= 400) return { ok: false, detail: `HTTP ${res.status}` };
+        if (m.expectText && !text.includes(m.expectText)) return { ok: false, detail: `HTTP ${res.status}, but “${m.expectText}” isn't on the page` };
+        return { ok: true, detail: `HTTP ${res.status}` };
+      } finally { clearTimeout(timer); }
+    }
+    if (m.type === "port") {
+      const [host, port] = [target.slice(0, target.lastIndexOf(":")), Number(target.slice(target.lastIndexOf(":") + 1))];
+      return await new Promise(resolve => {
+        const s = require("net").connect({ host, port, timeout: 5000 });
+        s.on("connect", () => { s.destroy(); resolve({ ok: true, detail: `${target} open` }); });
+        s.on("timeout", () => { s.destroy(); resolve({ ok: false, detail: `${target} timed out` }); });
+        s.on("error", e => resolve({ ok: false, detail: `${target}: ${e.code || e.message}` }));
+      });
+    }
+    if (m.type === "disk") {
+      const st = fs.statfsSync(target);
+      const freeGB = (st.bavail * st.bsize) / 1073741824;
+      const min = Number(m.minFreeGB || 5);
+      return { ok: freeGB >= min, detail: `${freeGB.toFixed(1)} GB free (needs ${min})` };
+    }
+    if (m.type === "process") {
+      const { spawnSync } = require("child_process");
+      const r = process.platform === "win32"
+        ? spawnSync("tasklist", ["/FI", `IMAGENAME eq ${target}`, "/NH"], { encoding: "utf8", windowsHide: true })
+        : spawnSync("pgrep", ["-f", target], { encoding: "utf8" });
+      const running = process.platform === "win32" ? (r.stdout || "").toLowerCase().includes(target.toLowerCase()) : r.status === 0;
+      return { ok: running, detail: running ? `${target} is running` : `${target} isn't running` };
+    }
+    if (m.type === "file") {
+      if (!fs.existsSync(target)) return { ok: false, detail: `${target} is missing`, fingerprint: "missing" };
+      const st = fs.statSync(target);
+      return { ok: true, detail: `${target} changed ${localISO(st.mtime)}`, fingerprint: `${st.size}@${st.mtimeMs}` };
+    }
+    if (m.type === "command") {
+      const { spawnSync } = require("child_process");
+      const r = spawnSync(target, { shell: true, encoding: "utf8", timeout: 30000, windowsHide: true });
+      const last = String((r.stdout || "") + (r.stderr || "")).trim().split("\n").pop() || "";
+      return { ok: r.status === 0, detail: `exit ${r.status === null ? "timeout" : r.status}${last ? `: ${last.slice(0, 120)}` : ""}` };
+    }
+    return { ok: false, detail: `unknown monitor type ${m.type}` };
+  } catch (e) {
+    return { ok: false, detail: String(e.name === "AbortError" ? "timed out" : (e.cause && e.cause.code) || e.message).slice(0, 160) };
+  }
+}
+
+// Runs the monitors that are due. A change of state posts a comment on the
+// monitor's task, shows a notification, and (with wake on) queues a session.
+async function runMonitors({ force = false } = {}) {
+  const list = loadMonitors();
+  if (!list.length) return [];
+  const changes = [];
+  for (const m of list) {
+    const due = force || !m.checkedAt || Date.now() - Date.parse(m.checkedAt) >= Math.max(2, m.every || 5) * 60000 - 15000;
+    if (!due) continue;
+    const r = await checkMonitor(m);
+    const before = m.state;
+    m.checkedAt = new Date().toISOString();
+    // A file monitor reports a change of the file itself, not up and down.
+    const changed = m.type === "file"
+      ? before && before.fingerprint !== undefined && r.fingerprint !== before.fingerprint
+      : before ? before.ok !== r.ok : !r.ok;
+    const prevSince = m.since;
+    if (!before || changed) m.since = m.checkedAt;
+    m.state = { ok: r.ok, detail: r.detail, fingerprint: r.fingerprint };
+    if (changed) changes.push({ m, r, before, prevSince });
+  }
+  saveMonitors(list);
+  for (const { m, r, before, prevSince } of changes) {
+    const text = m.type === "file"
+      ? `📄 Monitor “${m.name}”: ${r.detail}.`
+      : r.ok ? `✅ Monitor “${m.name}” is OK again: ${r.detail}${before && prevSince ? ` (failing since ${localISO(prevSince)})` : ""}.`
+             : `⚠️ Monitor “${m.name}” FAILED: ${r.detail}.`;
+    notify(`WorkFlow · ${m.name}`, text.replace(/^\S+ /, ""));
+    if (m.task) {
+      try { await send("add_comment", { taskID: m.task, text }); } catch (e) { logWake(`monitor ${m.name}: couldn't comment: ${e.message}`); }
+    }
+    if (m.wake && m.task) {
+      const q = readJSON(X.monitorWakes, []) || [];
+      q.push({ key: `monitor:${m.name}:${Date.now()}`, taskID: m.task, title: m.taskTitle || m.name, why: `monitor “${m.name}” changed: ${r.ok ? "OK" : "FAILED"}, ${r.detail}` });
+      saveAtomic(X.monitorWakes, JSON.stringify(q.slice(-20)));
+    }
+  }
+  return changes;
+}
+
+function monitorLine(m) {
+  const s = m.state ? `${m.state.ok ? "OK" : "FAILED"}: ${m.state.detail} (checked ${localISO(m.checkedAt)})` : "not checked yet";
+  return `${m.name}  [${m.type} ${m.target}]  every ${m.every || 5} min${m.wake ? ", wakes Claude" : ""}${m.taskTitle ? `, task “${m.taskTitle}”` : ""}\n    ${s}`;
+}
+
+// Adds or replaces a monitor. `by` is "person" (the command line) or
+// "assistant" (the MCP tool), which may not add command monitors.
+function addMonitor(spec, by) {
+  const name = String(spec.name || "").trim();
+  if (!/^[\w .-]{1,40}$/.test(name)) throw new Error("Give the monitor a short name (letters, digits, spaces, . _ -).");
+  if (!MONITOR_TYPES.includes(spec.type)) throw new Error(`Type must be one of: ${MONITOR_TYPES.join(", ")}.`);
+  if (by === "assistant" && !ASSISTANT_MONITOR_TYPES.includes(spec.type)) {
+    throw new Error("Only the person at this computer can add a command monitor: it runs a command every few minutes. Ask them to run: workflow-companion monitor add --command \"…\"");
+  }
+  if (!spec.target) throw new Error("Say what to check (a URL, host:port, a folder, a process name, a file, or a command).");
+  if (spec.type === "http" && !/^https?:\/\//i.test(spec.target)) throw new Error("An http monitor needs a URL starting http:// or https://.");
+  if (spec.type === "port" && !/^.+:\d{1,5}$/.test(spec.target)) throw new Error("A port monitor needs host:port.");
+  const list = loadMonitors().filter(m => m.name.toLowerCase() !== name.toLowerCase());
+  const m = { name, type: spec.type, target: String(spec.target), every: Math.min(1440, Math.max(2, Number(spec.every) || 5)),
+    wake: !!spec.wake, task: spec.task || "", taskTitle: spec.taskTitle || "", by, addedAt: new Date().toISOString() };
+  if (spec.minFreeGB) m.minFreeGB = Number(spec.minFreeGB);
+  if (spec.expectText) m.expectText = String(spec.expectText);
+  list.push(m);
+  if (list.length > 30) throw new Error("That's 30 monitors already; remove one first.");
+  saveMonitors(list);
+  return m;
+}
+
+function removeMonitor(name) {
+  const list = loadMonitors();
+  const kept = list.filter(m => m.name.toLowerCase() !== String(name).toLowerCase());
+  if (kept.length === list.length) throw new Error(`No monitor called “${name}”.`);
+  saveMonitors(kept);
+}
+
+// ---- approvals (#3)
+
+function loadApprovals() { return readJSON(X.approvals, []) || []; }
+function saveApprovals(list) { ensureHome(); saveAtomic(X.approvals, JSON.stringify(list.slice(-100), null, 2)); }
+function approvalCode() {
+  const abc = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";   // nothing that reads as another letter
+  return Array.from(require("crypto").randomBytes(4)).map(b => abc[b % abc.length]).join("");
+}
+
+// The person's answer to an approval, from the task's thread: "approve K7Q2"
+// or "decline K7Q2" in a comment written after the request by a person, never
+// an assistant. Returns { decision, by, at, commentID } or null.
+function approvalAnswer(a, snap) {
+  const t = (snap.tasks || []).find(x => x.id === a.taskID);
+  if (!t) return null;
+  const shared = new Set((snap.projects || []).filter(p => p.isShared).map(p => p.name));
+  if (t.project && shared.has(t.project)) return null;
+  const re = new RegExp(`(^|[^A-Za-z0-9])(approve|approved|decline|declined|deny|no)\\s+${a.code}(?![A-Za-z0-9])`, "i");
+  for (const c of (t.comments || []).slice().reverse()) {
+    if (isAgentID(c.authorID)) continue;
+    if (Date.parse(c.timestamp) < Date.parse(a.requestedAt)) break;
+    const m = re.exec(c.text || "");
+    if (m) return { decision: /^approv/i.test(m[2]) ? "approved" : "declined", by: c.author || "?", at: c.timestamp, commentID: c.id };
+  }
+  return null;
+}
+
+// Brings each pending approval up to date with the snapshot.
+function refreshApprovals(snap) {
+  const list = loadApprovals();
+  let changed = false;
+  const decided = [];
+  for (const a of list) {
+    if (a.status !== "pending") continue;
+    if (Date.now() > Date.parse(a.expiresAt)) { a.status = "expired"; changed = true; continue; }
+    const ans = snap ? approvalAnswer(a, snap) : null;
+    if (ans) { Object.assign(a, { status: ans.decision, decidedBy: ans.by, decidedAt: ans.at, decisionComment: ans.commentID }); changed = true; decided.push(a); }
+  }
+  if (changed) saveApprovals(list);
+  return decided;
+}
+
+function findApproval(code) {
+  const a = loadApprovals().find(x => x.code === String(code || "").trim().toUpperCase());
+  if (!a) throw new Error(`No approval ${code} on this computer.`);
+  return a;
+}
+
+// Runs an approved command, exactly as it was when the person approved it.
+function runApproved(a) {
+  const { spawnSync } = require("child_process");
+  const started = Date.now();
+  const r = spawnSync(a.command, { shell: true, encoding: "utf8", timeout: RUN_LIMIT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+    cwd: a.cwd && fs.existsSync(a.cwd) ? a.cwd : os.homedir() });
+  const output = String((r.stdout || "") + (r.stderr || "")).trim();
+  return { exit: r.status === null ? "timed out" : r.status, seconds: Math.round((Date.now() - started) / 1000), output: output.slice(-6000) };
+}
+
+// ---- inbox folder (#7)
+
+function inboxFolder(cfg) { return cfg && cfg.inboxFolder ? cfg.inboxFolder : null; }
+
+// Files dropped in the folder (or a subfolder named after a project) become
+// tasks with the file attached, then move to "Filed". Up to 5 a tick; a file
+// still being written (changed in the last 10 s) waits for the next one.
+async function runInbox(cfg) {
+  const root = inboxFolder(cfg);
+  if (!root || !fs.existsSync(root)) return [];
+  const done = [];
+  const skip = n => n.startsWith(".") || /\.(tmp|part|crdownload|download)$/i.test(n) || n === "Filed" || /^desktop\.ini$|^thumbs\.db$/i.test(n);
+  const candidates = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (skip(entry.name)) continue;
+    if (entry.isFile()) candidates.push({ file: path.join(root, entry.name), project: cfg.inboxProject || "" });
+    else if (entry.isDirectory()) {
+      for (const sub of fs.readdirSync(path.join(root, entry.name), { withFileTypes: true })) {
+        if (sub.isFile() && !skip(sub.name)) candidates.push({ file: path.join(root, entry.name, sub.name), project: entry.name });
+      }
+    }
+  }
+  for (const c of candidates.slice(0, 5)) {
+    const st = fs.statSync(c.file);
+    if (Date.now() - st.mtimeMs < 10000) continue;
+    const name = path.basename(c.file);
+    try {
+      const created = await send("create_task", { title: name.replace(/\.[^.]+$/, ""), project: c.project || undefined,
+        notes: `Dropped into ${root} on ${os.hostname()}.`, assignee: cfg.inboxAssign ? AGENT.name : undefined, hasDueDate: false });
+      if (created.status !== "applied" || !created.taskID) throw new Error(created.message || "the task wasn't created");
+      const staged = await stageFile(c.file);
+      const att = await sendWithFile("attach_file", { taskID: created.taskID, displayName: name }, staged, 15000);
+      if (att.status === "failed" || att.status === "rejected") throw new Error(att.message || "the file wasn't attached");
+      const filed = path.join(root, "Filed", new Date().toISOString().slice(0, 10));
+      fs.mkdirSync(filed, { recursive: true });
+      let dest = path.join(filed, name);
+      if (fs.existsSync(dest)) dest = path.join(filed, `${Date.now()}-${name}`);
+      fs.renameSync(c.file, dest);
+      done.push(name);
+      logWake(`inbox: “${name}” → task ${created.taskID}`);
+    } catch (e) {
+      logWake(`inbox: “${name}” not filed: ${e.message}`);
+    }
+  }
+  if (done.length) notify("WorkFlow", `${done.length === 1 ? `“${done[0]}” is` : `${done.length} files are`} now in WorkFlow.`);
+  return done;
+}
+
+// ---- the tick: everything above, once, without overlapping itself
+
+async function tickExtras() {
+  const cfg = readJSON(CP.config, null);
+  if (!cfg) return;
+  ensureHome();
+  // One tick at a time; a holder older than 10 minutes is stale.
+  try { const fd = fs.openSync(X.tickLock, "wx"); fs.closeSync(fd); }
+  catch (_) {
+    let age = 0; try { age = Date.now() - fs.statSync(X.tickLock).mtimeMs; } catch (_) {}
+    if (age < 10 * 60000) return;
+    try { fs.writeFileSync(X.tickLock, ""); } catch (_) { return; }
+  }
+  try {
+    await runMonitors().catch(e => logWake(`monitors: ${e.message}`));
+    await runInbox(cfg).catch(e => logWake(`inbox: ${e.message}`));
+    const decided = refreshApprovals(cloudSnap);
+    for (const a of decided) notify(`WorkFlow · approval ${a.code}`, `${a.decidedBy} ${a.status} “${a.action}”.`);
+  } finally { try { fs.unlinkSync(X.tickLock); } catch (_) {} }
+}
+
+// Makes sure the 2-minute job exists (monitors and the inbox folder need it
+// even with waking off). Respects WF_NO_SCHEDULE and --no-schedule.
+function ensureTick() {
+  if (argv.includes("--no-schedule") || process.env.WF_NO_SCHEDULE) return "not scheduled (WF_NO_SCHEDULE)";
+  return installWakeSchedule();
+}
+
+// ---- session report (#4)
+
+async function attachReport({ items, started, r, wrote }) {
+  const cfg = readJSON(CP.config, {}) || {};
+  const first = items.find(i => i.kind === "task");
+  if (cfg.reports === false || !first || !wrote) return;
+  const ops = opsSince(started);
+  const ran = loadApprovals().filter(a => a.ranAt && Date.parse(a.ranAt) >= started);
+  const final = r.out.trim().split("\n").slice(-40).join("\n").slice(-3000);
+  const md = [
+    `# Session report: ${AGENT.name} on ${os.hostname()}`,
+    "",
+    `- Started: ${localISO(started)}`,
+    `- Took: ${Math.max(1, Math.round((Date.now() - started) / 60000))} min`,
+    `- Outcome: ${r.timedOut ? "stopped at the time limit" : r.code === 0 ? "finished" : `ended early (exit ${r.code})`}`,
+    `- Asked about: ${items.map(i => `${i.title} (${i.why})`).join("; ")}`,
+    "",
+    "## What it changed in WorkFlow",
+    ...(ops.length ? ops.map(o => `- ${localISO(o.at).split(", ").pop()} ${o.op}${o.what ? `: ${o.what}` : ""}`) : ["- nothing"]),
+    ...(ran.length ? ["", "## Commands it ran (approved)", ...ran.map(a => `- \`${a.command}\`: exit ${a.result && a.result.exit} (approved by ${a.decidedBy})`)] : []),
+    "",
+    "## Its last words",
+    "",
+    "```",
+    final || "(nothing)",
+    "```",
+    "",
+  ].join("\n");
+  const file = path.join(os.tmpdir(), `session-report-${Date.now()}.md`);
+  fs.writeFileSync(file, md);
+  try {
+    const staged = await stageFile(file);
+    const stamp = new Date(started).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    await sendWithFile("attach_file", { taskID: first.id, displayName: `Session report ${stamp}.md` }, staged, 15000);
+  } catch (e) { logWake(`report not attached: ${e.message}`); }
+  finally { try { fs.unlinkSync(file); } catch (_) {} }
+}
+
+// ---- command line
+
+function monitorCLI() {
+  const sub = argv[argv.indexOf("monitor") + 1];
+  if (sub === "list" || !sub) {
+    const list = loadMonitors();
+    console.log(list.length ? list.map(monitorLine).join("\n") : "No monitors. Add one with: workflow-companion monitor add --name site --http https://example.com --task \"Server status\" --wake");
+    return Promise.resolve(0);
+  }
+  if (sub === "remove") { removeMonitor(argv[argv.indexOf("remove") + 1]); console.log("Removed."); return Promise.resolve(0); }
+  if (sub === "check") {
+    return (async () => {
+      for (const m of loadMonitors()) { const r = await checkMonitor(m); console.log(`${m.name}: ${r.ok ? "OK" : "FAILED"}: ${r.detail}`); }
+      return 0;
+    })();
+  }
+  if (sub === "add") {
+    return (async () => {
+      const type = MONITOR_TYPES.find(t => argv.includes(`--${t}`));
+      if (!type) throw new Error(`Say what to check: --http URL, --port host:port, --disk PATH, --process NAME, --file PATH or --command "…"`);
+      let task = "", taskTitle = "";
+      if (arg("task")) {
+        await cloud.load(true);
+        const t = findTask(arg("task"));
+        task = t.id; taskTitle = t.title;
+      }
+      const m = addMonitor({ name: arg("name"), type, target: arg(type), every: arg("every"), wake: argv.includes("--wake"),
+        task, taskTitle, minFreeGB: arg("min-gb"), expectText: arg("expect") }, "person");
+      const r = await checkMonitor(m);
+      console.log(`Monitor “${m.name}” added: ${r.ok ? "OK" : "FAILED"} now (${r.detail}). Checked every ${m.every} min${task ? `; changes are posted on “${taskTitle}”` : ""}${m.wake ? " and wake Claude" : ""}.`);
+      console.log(`Schedule: ${ensureTick()}.`);
+      return 0;
+    })();
+  }
+  throw new Error("monitor list | add | remove NAME | check");
+}
+
+function setFlag(key, on, sayOn, sayOff) {
+  if (!fs.existsSync(CP.config)) { console.error(signInHelp("Not signed in yet.")); return 2; }
+  updateConfig(cfg => { cfg[key] = on; });
+  console.log(on ? sayOn : sayOff);
+  return 0;
+}
+
+async function inboxCLI(on) {
+  if (!fs.existsSync(CP.config)) { console.error(signInHelp("Not signed in yet.")); return 2; }
+  if (!on) { updateConfig(cfg => { delete cfg.inboxFolder; }); console.log("The inbox folder is off. Files in it stay where they are."); return 0; }
+  const folder = path.resolve(String(arg("folder") || path.join(os.homedir(), "WorkFlow Inbox")).replace(/^~/, os.homedir()));
+  fs.mkdirSync(folder, { recursive: true });
+  updateConfig(cfg => { cfg.inboxFolder = folder; cfg.inboxProject = arg("project") || ""; cfg.inboxAssign = argv.includes("--assign"); });
+  console.log(`Inbox folder: ${folder}\n  Drop a file in and within a couple of minutes it's a task in WorkFlow with the file attached${arg("project") ? ` (project ${arg("project")})` : ""}; a subfolder named after a project files it there. Filed files move to ${path.join(folder, "Filed")}.\n  Schedule: ${ensureTick()}.`);
   return 0;
 }
 
@@ -1918,10 +2486,20 @@ const HELP = `WorkFlow companion ${SERVER_INFO.version}
                                 (--allow-tools, --model, --workdir, --max-minutes, --claude, --skip-existing)
   workflow-companion wake-off   stop doing that; work waits until you ask
   workflow-companion wake       one check of the queue (what the scheduled job runs)
+  workflow-companion monitor list | check | remove NAME
+  workflow-companion monitor add --name N (--http URL | --port HOST:PORT | --disk PATH --min-gb G |
+                                --process NAME | --file PATH | --command "…") [--task T] [--every MIN] [--wake]
+                                checks this computer runs without using Claude; changes are posted on the task
+  workflow-companion approvals on|off   let an assistant run a command once you reply "approve CODE" (off by default)
+  workflow-companion inbox-on [--folder PATH] [--project P] [--assign]   files dropped in the folder become tasks
+  workflow-companion inbox-off
+  workflow-companion notifications on|off   notices on this computer (new work, monitors, sign-in ended)
+  workflow-companion reports on|off   attach a short report to the task after each session (on by default)
   workflow-companion signout    forget the sign-in on this computer
   workflow-companion --print-config
 
 Needs WorkFlow 5.2+ on an iPhone, iPad or Mac, with the companion switched on in its Settings.
+Install in one line: see https://github.com/TeamDzX/workflow-companion#install
 `;
 
 if (argv.includes("--print-config")) printConfig();
@@ -1933,6 +2511,16 @@ else if (verb === "update") updateNow().then(c => { process.exitCode = c; }, e =
 else if (verb === "auto-update") process.exitCode = setAutoUpdate(argv[argv.indexOf("auto-update") + 1] !== "off");
 else if (verb === "wake") wake().then(c => { process.exitCode = c; }, e => { logWake(`failed: ${e.message || e}`); process.exitCode = 1; });
 else if (verb === "wake-on" || verb === "wake-off") wakeSetup(verb === "wake-on").then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+else if (verb === "monitor") monitorCLI().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+else if (verb === "approvals") process.exitCode = setFlag("approvalsEnabled", argv[argv.indexOf("approvals") + 1] === "on",
+  "Approvals are on. An assistant can ask to run one exact command on this computer; it runs only after you reply \"approve CODE\" on the task in WorkFlow, once, within 24 hours. Turn off with: workflow-companion approvals off",
+  "Approvals are off. Requests are refused and approved ones won't run.");
+else if (verb === "inbox-on" || verb === "inbox-off") inboxCLI(verb === "inbox-on").then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+else if (verb === "notifications") process.exitCode = setFlag("notifications", argv[argv.indexOf("notifications") + 1] !== "off",
+  "Notifications are on.", "Notifications are off.");
+else if (verb === "reports") process.exitCode = setFlag("reports", argv[argv.indexOf("reports") + 1] !== "off",
+  "Session reports are on: each session attaches a short report to its task.", "Session reports are off.");
+else if (verb === "notify-test") { notify("WorkFlow companion", `Notifications work on ${os.hostname()}.`); console.log("Sent a test notification."); }
 else if (verb === "signout") {
   removeSchedule();
   removeWakeSchedule();

@@ -37,6 +37,26 @@ away in the app switcher. With both switched on, the Mac answers while it's
 awake and the iPhone stands by. Every command is applied exactly once, however
 many devices are on.
 
+## Install
+
+One line installs Node.js if needed, signs this computer in, adds the
+companion to Claude Code and offers to let it start work on its own:
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/TeamDzX/workflow-companion/main/install.ps1 | iex
+```
+
+**Mac or Linux** (Terminal):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/TeamDzX/workflow-companion/main/install.sh | sh
+```
+
+Switch the companion on in WorkFlow first (step 1 below). The steps that
+follow are what the installer does, if you'd rather do them by hand.
+
 ## Set up
 
 1. In WorkFlow on an iPhone or iPad: **Settings → Windows Companion → Answer
@@ -166,11 +186,53 @@ npx -y @opticell/workflow-companion wake-on
 | `workflow-companion wake-on` | Starts a Claude Code session on its own when work for its name arrives. See above. |
 | `workflow-companion wake-off` | Stops that. Work waits until you ask Claude here. |
 | `workflow-companion wake` | One check of the queue. The scheduled job runs this. |
+| `workflow-companion monitor add\|list\|check\|remove` | Checks this computer runs without using Claude. See below. |
+| `workflow-companion approvals on\|off` | Lets an assistant run one exact command after you reply "approve CODE" (off by default). |
+| `workflow-companion inbox-on\|inbox-off` | Files dropped in a folder become tasks. |
+| `workflow-companion notifications on\|off` | Notices on this computer (on by default). `notify-test` shows one. |
+| `workflow-companion reports on\|off` | A short report attached to the task after each session (on by default). |
 | `workflow-companion signout` | Deletes the sign-in, cached data and both scheduled jobs. |
-| `workflow-companion wake-on` | Starts a Claude Code session on its own when work for its name arrives. See above. |
-| `workflow-companion wake-off` | Stops that. Work waits until you ask Claude here. |
-| `workflow-companion wake` | One check of the queue. The scheduled job runs this. |
-| `workflow-companion signout` | Deletes the sign-in, cached data and both scheduled jobs. |
+
+## On this computer, by itself (1.8)
+
+These run in the same 2-minute scheduled job as waking, and cost no Claude
+usage.
+
+**Monitors.** Checks that wake Claude only when something changes:
+
+```sh
+workflow-companion monitor add --name site --http https://example.com --task "Server status" --wake
+workflow-companion monitor add --name disk --disk C:\ --min-gb 20 --task "Server status"
+workflow-companion monitor add --name api --port 10.0.0.5:443 --every 2
+workflow-companion monitor add --name backup --file D:\backups\latest.zip --task "Backups"
+workflow-companion monitor add --name nightly --command "check-backups.cmd" --task "Backups" --wake
+```
+
+A change (down, back up, the file changed) is posted on the task, shows a
+notification here, and with `--wake` starts a session about it. An assistant
+can set up website, port, disk, process and file monitors itself
+(`workflow_monitor`), but **only you can add a command monitor**, because it
+runs a command every few minutes.
+
+**Approvals.** An assistant can ask to run one exact command on this computer
+(restart a service, install an update). It posts the command on the task with
+a code; reply `approve K7Q2` (or `decline K7Q2`) from your phone. Only a
+person's reply counts, never another assistant's; tasks in shared projects
+can't ask; the command runs once, exactly as shown, within 24 hours. **Off
+until you run `workflow-companion approvals on` on this computer.**
+
+**Inbox folder.** `workflow-companion inbox-on` makes `~/WorkFlow Inbox`
+(or `--folder`): drop a file in and it becomes a task with the file attached.
+A subfolder named after a project files it into that project. Filed files
+move to `Filed/<date>`. `--assign` puts them in this assistant's queue.
+
+**Notifications.** A notice on this computer when work arrives, a monitor
+changes, an approval is answered, a session needs attention, or the iCloud
+sign-in has ended (with the command that fixes it).
+
+**Session reports.** After each session that changed something, a short
+report is attached to its task: what it was asked, what it changed, any
+approved commands it ran, and its last words.
 
 ## Worth knowing
 
@@ -199,12 +261,15 @@ npx -y @opticell/workflow-companion wake-on
 
 ## Tools
 
-The same 29 tools as the Mac's Agent Bridge MCP server, including:
+36 tools, including:
 `workflow_queue`, `workflow_get_task`, `workflow_comment`,
 `workflow_set_status_line`, `workflow_check_subtasks`, `workflow_update_task`,
 `workflow_create_task`, `workflow_list_notes`, `workflow_reply_note`,
 `workflow_list_projects`, `workflow_list_documents`, `workflow_update_document`,
-`workflow_draft_email` and `workflow_state`.
+`workflow_draft_email`, `workflow_state`, and from 1.7 and 1.8
+`workflow_hand_off`, `workflow_watch`, `workflow_house_rules`,
+`workflow_monitor`, `workflow_request_approval`, `workflow_check_approval`
+and `workflow_run_approved`.
 
 © Opticell Limited · <https://www.opticell-limited.com/companion>
 
