@@ -74,6 +74,8 @@ jobs:
       - name: Publish to the MCP Registry
         continue-on-error: true
         run: |
+          # The registry checks npm, which takes a few minutes to show a new version.
+          for i in $(seq 1 40); do curl -fsS "https://registry.npmjs.org/@opticell/workflow-companion/$VERSION" >/dev/null 2>&1 && break; sleep 15; done
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
