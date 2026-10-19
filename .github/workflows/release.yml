@@ -33,6 +33,8 @@ jobs:
 
       - name: Tests
         run: bash test/run.sh
+      - name: Shared rule cases
+        run: bash test/rules/check.sh
 
       - name: Build
         env:

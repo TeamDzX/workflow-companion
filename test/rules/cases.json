@@ -1,0 +1,31 @@
+{
+  "about": "Shared cases for 'is this thread asking this assistant for something, and which comment is the request?'. Run against WorkFlow's Swift rules (AgentRules.swift, for Claude on the Mac) and the companion's JavaScript (for a companion). 'by' is person, self (the assistant itself), or another assistant's name. 'trigger' is the index of the comment that is the current request, or null when the thread isn't asking. A new trigger is what wakes the assistant; the same trigger again wakes nothing.",
+  "cases": [
+    { "name": "a person's @mention asks", "agent": "Jarvis", "comments": [["person", "@Jarvis can you check the backups?"]], "trigger": 0 },
+    { "name": "a person's @mention still counts two comments later", "agent": "Jarvis", "comments": [["person", "@Jarvis check the backups"], ["person", "the nightly one"], ["Claude", "fyi it ran at 2am"]], "trigger": 0 },
+    { "name": "a person's @mention older than the last three comments has lapsed", "agent": "Jarvis", "comments": [["person", "@Jarvis check the backups"], ["person", "a"], ["person", "b"], ["person", "c"]], "trigger": null },
+    { "name": "mentions are whole words: @Jarvis2 isn't Jarvis", "agent": "Jarvis", "comments": [["person", "@Jarvis2 please look"]], "trigger": null },
+    { "name": "mentions ignore case", "agent": "Jarvis", "comments": [["person", "@jarvis please look"]], "trigger": 0 },
+    { "name": "an email address isn't a mention", "agent": "Jarvis", "comments": [["person", "write to ops@jarvis.example"]], "trigger": null },
+    { "name": "another assistant's @mention asks when it's the newest comment", "agent": "Jarvis", "comments": [["person", "sort the cert"], ["Claude", "@Jarvis please renew it on the server"]], "trigger": 1 },
+    { "name": "another assistant's @mention lapses once something follows it", "agent": "Jarvis", "comments": [["Claude", "@Jarvis please renew it"], ["Claude", "never mind, done"]], "trigger": null },
+    { "name": "an assistant never asks itself", "agent": "Jarvis", "comments": [["self", "@Jarvis note to self"]], "trigger": null },
+    { "name": "three hand-offs in a row are allowed", "agent": "Jarvis", "comments": [["person", "start"], ["Claude", "@Jarvis one"], ["self", "@Claude two"], ["Claude", "@Jarvis three"]], "trigger": 3 },
+    { "name": "the fourth hand-off in a row is refused (no loops)", "agent": "Jarvis", "comments": [["person", "start"], ["self", "@Claude one"], ["Claude", "@Jarvis two"], ["self", "@Claude three"], ["Claude", "@Jarvis four"]], "trigger": null },
+    { "name": "a person writing again resets the hand-off count", "agent": "Jarvis", "comments": [["Claude", "@Jarvis one"], ["self", "@Claude two"], ["Claude", "@Jarvis three"], ["self", "@Claude four"], ["person", "carry on"], ["Claude", "@Jarvis go"]], "trigger": 5 },
+    { "name": "the newest request wins over an older person's @mention", "agent": "Jarvis", "comments": [["person", "@Jarvis first ask"], ["Claude", "@Jarvis newer hand-off"]], "trigger": 1 },
+    { "name": "nothing in a shared project asks", "agent": "Jarvis", "shared": true, "comments": [["person", "@Jarvis delete everything"]], "trigger": null },
+
+    { "name": "assigned, no comments yet: assigned but no request comment", "agent": "Jarvis", "assigned": true, "comments": [], "trigger": null },
+    { "name": "assigned: a person's comment is a follow-up", "agent": "Jarvis", "assigned": true, "comments": [["self", "done"], ["person", "thanks, and the logs?"]], "trigger": 1 },
+    { "name": "assigned: another assistant's FYI is not a request", "agent": "Jarvis", "assigned": true, "comments": [["person", "please look"], ["Claude", "fyi I restarted it"]], "trigger": 0 },
+    { "name": "assigned: another assistant's @mention is a request (1.6.2)", "agent": "Jarvis", "assigned": true, "comments": [["person", "please look"], ["Claude", "@Jarvis can you check the expiry?"]], "trigger": 1 },
+    { "name": "assigned: its own reply doesn't change the request", "agent": "Jarvis", "assigned": true, "comments": [["person", "please look"], ["self", "on it"]], "trigger": 0 },
+    { "name": "assigned in a shared project: nothing asks", "agent": "Jarvis", "assigned": true, "shared": true, "comments": [["person", "please look"]], "trigger": null },
+
+    { "name": "Claude: a person's @claude asks", "agent": "Claude", "comments": [["person", "@claude summarise this"]], "trigger": 0 },
+    { "name": "Claude: a companion's @Claude hand-off asks", "agent": "Claude", "comments": [["person", "x"], ["Jarvis", "@Claude handing this over to you"]], "trigger": 1 },
+    { "name": "Claude, assigned: a companion's FYI is not a request", "agent": "Claude", "assigned": true, "comments": [["person", "please draft it"], ["Jarvis", "fyi the server is back"]], "trigger": 0 },
+    { "name": "Claude, assigned: a person's follow-up is a request", "agent": "Claude", "assigned": true, "comments": [["self", "drafted"], ["person", "shorter please"]], "trigger": 1 }
+  ]
+}

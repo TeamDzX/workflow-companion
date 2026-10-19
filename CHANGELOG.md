@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.2
+- **Shared projects never start a session.** A task assigned to the
+  companion in a shared project no longer wakes it, or appears in its queue:
+  a collaborator can assign tasks and comment there, so it isn't only you
+  asking. (WorkFlow on the Mac has always refused these; @mentions in shared
+  projects were already ignored.)
+- **Shared rule tests.** The rules for which comment asks an assistant for
+  something are checked against the same cases as WorkFlow's own, on every
+  change, so the two can't drift apart again.
+
 ## 1.8.1
 - **`workflow-companion doctor`** checks everything on this computer in one
   go: Node.js, the iCloud sign-in, whether WorkFlow is publishing and

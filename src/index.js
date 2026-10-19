@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "1.8.1" };
+const SERVER_INFO = { name: "workflow", version: "1.8.2" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -629,7 +629,11 @@ function showTask(t) {
 function queueItems(snap) {
   const shared = new Set((snap.projects || []).filter(p => p.isShared).map(p => p.name));
   const mine = t => (t.assignee || "").toLowerCase() === AGENT.name.toLowerCase();
-  const rows = (snap.tasks || []).filter(t => t.status !== "Completed" && !t.isHidden && (mine(t) || addressedToMe(t, shared) || watchOf(t)));
+  // Nothing in a shared project, however it got there: a collaborator can
+  // assign tasks and write comments there, so it isn't only the owner asking
+  // (the Mac's rule too; the shared cases in Tools/agent-rules check both).
+  const rows = (snap.tasks || []).filter(t => t.status !== "Completed" && !t.isHidden && !(t.project && shared.has(t.project))
+    && (mine(t) || addressedToMe(t, shared) || watchOf(t)));
   const notes = (snap.notes || []).filter(n => !n.isArchived && !n.convertedAt && mentionsMe(`${n.title || ""}\n${n.body || ""}`));
   return { rows, notes, mine };
 }
@@ -2628,29 +2632,34 @@ Needs WorkFlow 5.2+ on an iPhone, iPad or Mac, with the companion switched on in
 Install in one line: see https://github.com/TeamDzX/workflow-companion#install
 `;
 
-if (argv.includes("--print-config")) printConfig();
-else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);
-else if (verb === "setup") setup().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
-else if (verb === "doctor") doctorReport().then(r => { console.log(r.text); process.exitCode = r.problems ? 1 : 0; }, e => { console.error(e.message || e); process.exitCode = 1; });
-else if (verb === "status") cloudStateText().then(t => console.log(t), e => { console.error(e.message || e); process.exitCode = 1; });
-else if (verb === "keepalive") keepAlive().then(c => { process.exitCode = c; });
-else if (verb === "update") updateNow().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
-else if (verb === "auto-update") process.exitCode = setAutoUpdate(argv[argv.indexOf("auto-update") + 1] !== "off");
-else if (verb === "wake") wake().then(c => { process.exitCode = c; }, e => { logWake(`failed: ${e.message || e}`); process.exitCode = 1; });
-else if (verb === "wake-on" || verb === "wake-off") wakeSetup(verb === "wake-on").then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
-else if (verb === "monitor") monitorCLI().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
-else if (verb === "approvals") process.exitCode = setFlag("approvalsEnabled", argv[argv.indexOf("approvals") + 1] === "on",
-  "Approvals are on. An assistant can ask to run one exact command on this computer; it runs only after you reply \"approve CODE\" on the task in WorkFlow, once, within 24 hours. Turn off with: workflow-companion approvals off",
-  "Approvals are off. Requests are refused and approved ones won't run.");
-else if (verb === "inbox-on" || verb === "inbox-off") inboxCLI(verb === "inbox-on").then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
-else if (verb === "notifications") process.exitCode = setFlag("notifications", argv[argv.indexOf("notifications") + 1] !== "off",
-  "Notifications are on.", "Notifications are off.");
-else if (verb === "reports") process.exitCode = setFlag("reports", argv[argv.indexOf("reports") + 1] !== "off",
-  "Session reports are on: each session attaches a short report to its task.", "Session reports are off.");
-else if (verb === "notify-test") { notify("WorkFlow companion", `Notifications work on ${os.hostname()}.`); console.log("Sent a test notification."); }
-else if (verb === "signout") {
-  removeSchedule();
-  removeWakeSchedule();
-  for (const f of Object.values(CP)) try { fs.unlinkSync(f); } catch (_) {}
-  console.log(`Signed out: removed the token, the settings and the keep-alive from ${COMPANION.home}.`);
-} else serve();
+// Loaded by the shared rule tests (Tools/agent-rules) rather than run.
+if (require.main !== module) {
+  module.exports = { wakeItems, queueItems, addressingComment, assignedHandoff, agent: () => AGENT };
+} else {
+  if (argv.includes("--print-config")) printConfig();
+  else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);
+  else if (verb === "setup") setup().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "doctor") doctorReport().then(r => { console.log(r.text); process.exitCode = r.problems ? 1 : 0; }, e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "status") cloudStateText().then(t => console.log(t), e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "keepalive") keepAlive().then(c => { process.exitCode = c; });
+  else if (verb === "update") updateNow().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "auto-update") process.exitCode = setAutoUpdate(argv[argv.indexOf("auto-update") + 1] !== "off");
+  else if (verb === "wake") wake().then(c => { process.exitCode = c; }, e => { logWake(`failed: ${e.message || e}`); process.exitCode = 1; });
+  else if (verb === "wake-on" || verb === "wake-off") wakeSetup(verb === "wake-on").then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "monitor") monitorCLI().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "approvals") process.exitCode = setFlag("approvalsEnabled", argv[argv.indexOf("approvals") + 1] === "on",
+    "Approvals are on. An assistant can ask to run one exact command on this computer; it runs only after you reply \"approve CODE\" on the task in WorkFlow, once, within 24 hours. Turn off with: workflow-companion approvals off",
+    "Approvals are off. Requests are refused and approved ones won't run.");
+  else if (verb === "inbox-on" || verb === "inbox-off") inboxCLI(verb === "inbox-on").then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "notifications") process.exitCode = setFlag("notifications", argv[argv.indexOf("notifications") + 1] !== "off",
+    "Notifications are on.", "Notifications are off.");
+  else if (verb === "reports") process.exitCode = setFlag("reports", argv[argv.indexOf("reports") + 1] !== "off",
+    "Session reports are on: each session attaches a short report to its task.", "Session reports are off.");
+  else if (verb === "notify-test") { notify("WorkFlow companion", `Notifications work on ${os.hostname()}.`); console.log("Sent a test notification."); }
+  else if (verb === "signout") {
+    removeSchedule();
+    removeWakeSchedule();
+    for (const f of Object.values(CP)) try { fs.unlinkSync(f); } catch (_) {}
+    console.log(`Signed out: removed the token, the settings and the keep-alive from ${COMPANION.home}.`);
+  } else serve();
+}
