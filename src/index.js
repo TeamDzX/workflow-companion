@@ -1884,17 +1884,20 @@ function notify(title, body, onceKey) {
   if (process.env.WF_NOTIFY_LOG) { try { fs.appendFileSync(process.env.WF_NOTIFY_LOG, `${title} | ${body}\n`); } catch (_) {} return; }
   const { spawn } = require("child_process");
   const opts = { detached: true, stdio: "ignore", windowsHide: true, env: Object.assign({}, process.env, { WF_T: title, WF_B: body }) };
+  // A missing notifier (no notify-send on a server) fails asynchronously:
+  // without a listener that error would end the whole process.
+  const quiet = child => { child.on("error", () => {}); child.unref(); };
   try {
     if (process.platform === "win32") {
       const ps = "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;" +
         "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);" +
         "$x = $t.GetElementsByTagName('text'); $x.Item(0).AppendChild($t.CreateTextNode($env:WF_T)) > $null; $x.Item(1).AppendChild($t.CreateTextNode($env:WF_B)) > $null;" +
         "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($t))";
-      spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps], opts).unref();
+      quiet(spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps], opts));
     } else if (process.platform === "darwin") {
-      spawn("osascript", ["-e", "display notification (system attribute \"WF_B\") with title (system attribute \"WF_T\")"], opts).unref();
+      quiet(spawn("osascript", ["-e", "display notification (system attribute \"WF_B\") with title (system attribute \"WF_T\")"], opts));
     } else {
-      spawn("notify-send", [title, body], opts).unref();
+      quiet(spawn("notify-send", [title, body], opts));
     }
   } catch (_) {}
 }

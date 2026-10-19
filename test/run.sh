@@ -11,6 +11,8 @@ SERVER_DEFAULT="$HERE/../../workflow-mcp/index.js"; [ -f "$SERVER_DEFAULT" ] || 
 export HOME="$W/home" MOCK_STATE="$W/state.json" SERVER="${SERVER:-$SERVER_DEFAULT}"
 # Never touch the real crontab or Task Scheduler from a test.
 export WF_NO_SCHEDULE=1
+# Nor show real notifications: they're written here instead.
+export WF_NOTIFY_LOG="$W/notify.log"
 mkdir -p "$HOME"; cd "$HERE"; node init.js
 fail=0; check() { if eval "$2"; then echo "pass  $1"; else echo "FAIL  $1"; fail=1; fi; }
 st() { node -e "const s=require(process.env.MOCK_STATE); console.log($1)"; }
@@ -309,7 +311,6 @@ check "notifications can be switched off" "[ \$(wc -l < $W/notify.log) = $lines 
 node -r ./mock.js "$SERVER" notifications on > /dev/null
 node -r ./mock.js "$SERVER" inbox-off > /dev/null
 node -e "require('fs').writeFileSync(process.env.HOME+'/.workflow-companion/monitors.json','[]')"
-unset WF_NOTIFY_LOG
 
 # Versions (1.6.1): presence, the latest-release check, and self-update.
 CUR=$(sed -n 's/^const SERVER_INFO = { name: "workflow", version: "\([0-9.]*\)" };$/\1/p' "$SERVER")
