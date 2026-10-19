@@ -1,7 +1,8 @@
 // The fake Mac: every 500 ms applies BridgeCommands (unless asleep).
 const fs = require("fs"); const STATE = process.env.MOCK_STATE;
 setInterval(() => {
-  const s = JSON.parse(fs.readFileSync(STATE, "utf8"));
+  let s;
+  try { s = JSON.parse(fs.readFileSync(STATE, "utf8")); } catch (_) { return; }   // mid-write: next tick
   if (s.asleep) return;
   for (const [name, r] of Object.entries(s.records)) if (r.recordType === "BridgeCommand") {
     const cmd = JSON.parse(r.fields.payload.value);
@@ -17,5 +18,5 @@ setInterval(() => {
     s.records["receipt-" + name] = { recordName: "receipt-" + name, recordType: "BridgeReceipt", fields: { payload: { value: JSON.stringify({ id: cmd.id, op: cmd.op, status: "applied", message: "did " + cmd.op, taskID: cmd.taskID || (cmd.op === "create_task" ? "NEW-" + cmd.id.slice(-6) : undefined) }) } } };
     delete s.records[name];
   }
-  fs.writeFileSync(STATE, JSON.stringify(s));
+  const t = `${STATE}.${process.pid}.tmp`; fs.writeFileSync(t, JSON.stringify(s)); fs.renameSync(t, STATE);
 }, 500);

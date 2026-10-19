@@ -1,8 +1,10 @@
 // Fake CloudKit Web Services + fake Mac, shared across processes via a JSON file.
 const fs = require("fs");
 const STATE = process.env.MOCK_STATE;
+// Several processes share this file: write whole files only (temp + rename),
+// so a reader never sees half of one.
 const load = () => JSON.parse(fs.readFileSync(STATE, "utf8"));
-const save = s => fs.writeFileSync(STATE, JSON.stringify(s));
+const save = s => { const t = `${STATE}.${process.pid}.tmp`; fs.writeFileSync(t, JSON.stringify(s)); fs.renameSync(t, STATE); };
 const snap = { generatedAt: new Date().toISOString(),
   tasks: [
     { id: "T1", title: "Quarterly report", status: "To Do", priority: "High", comments: [] },
