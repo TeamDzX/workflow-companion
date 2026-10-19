@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "1.8.0" };
+const SERVER_INFO = { name: "workflow", version: "1.8.1" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -1169,6 +1169,12 @@ const TOOLS = [
     },
   },
   {
+    name: "workflow_doctor",
+    description: "Check the companion on this computer end to end (sign-in, WorkFlow publishing and answering, version, scheduled jobs, Claude Code, last session, monitors) and say how to fix anything wrong. Use it when something isn't working.",
+    inputSchema: { type: "object", properties: {} },
+    handler: async () => (await doctorReport({ fromTool: true })).text,
+  },
+  {
     name: "workflow_ping",
     description: "Confirm the app is watching the bridge (round-trips one command).",
     inputSchema: { type: "object", properties: {} },
@@ -2253,6 +2259,122 @@ async function inboxCLI(on) {
   return 0;
 }
 
+// ------------------------------------------------------------------ doctor (1.8.1)
+//
+// Checks the whole chain on this computer in one go and says how to fix
+// anything that's wrong: Node, the iCloud sign-in, whether WorkFlow is
+// publishing and answering, the name, the version, the scheduled jobs,
+// Claude Code, and what the last session did. `fromTool` skips the checks
+// that would be odd from inside a Claude session (asking Claude Code about
+// itself).
+async function doctorReport({ fromTool = false } = {}) {
+  const npx = "npx -y @opticell/workflow-companion@latest";
+  const lines = [`WorkFlow companion ${SERVER_INFO.version} on ${os.hostname()}, as "${AGENT.name}"`, ""];
+  let problems = 0, warnings = 0;
+  const ok = l => lines.push(`  ✓ ${l}`);
+  const bad = (l, fix) => { problems++; lines.push(`  ✗ ${l}`); if (fix) lines.push(`      fix: ${fix}`); };
+  const warn = (l, fix) => { warnings++; lines.push(`  ! ${l}`); if (fix) lines.push(`      ${fix}`); };
+  const done = () => {
+    lines.push("", problems ? `${problems} problem(s)${warnings ? `, ${warnings} warning(s)` : ""}. Fix the ✗ lines first.`
+      : warnings ? `Working, with ${warnings} warning(s).` : "All good.");
+    return { text: lines.join("\n"), problems, warnings };
+  };
+  const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 90 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
+  const { spawnSync } = require("child_process");
+
+  const major = parseInt(process.versions.node, 10);
+  major >= 18 ? ok(`Node.js ${process.versions.node}`) : bad(`Node.js ${process.versions.node} is too old (18 or later)`, "install the LTS from https://nodejs.org");
+  if (!CLOUD) { warn("this is the Mac's own bridge, not a companion", "on the Mac, check Settings → Agent Bridge, or run: wf state"); return done(); }
+
+  const cfg = readJSON(CP.config, null);
+  if (!cfg || !fs.existsSync(CP.token)) { bad("not signed in on this computer", `${npx} setup`); return done(); }
+  try {
+    await cloud.call("public/users/caller");
+    ok(`iCloud sign-in works (${cfg.env || COMPANION.env})`);
+  } catch (e) {
+    if (e instanceof SignInNeeded) bad("the iCloud sign-in has ended (Apple ends one left unused for 9 to 14 hours)", `${npx} setup`);
+    else bad(`can't reach iCloud: ${String(e.message).split("\n")[0]}`, "check this computer's internet connection, then run doctor again");
+    return done();
+  }
+
+  try { await cloud.load(true); } catch (e) { bad(`couldn't read WorkFlow's snapshot: ${e.message}`); return done(); }
+  if (!cloudSnap) {
+    bad("WorkFlow hasn't published anything for the companion yet",
+      "switch it on in WorkFlow: iPhone/iPad Settings → Windows Companion → Answer the Companion, or Mac Settings → Agent Bridge → Cloud Bridge");
+  } else {
+    const age = Date.now() - Date.parse(cloudSnap.generatedAt);
+    const line = `${cloudSnap.tasks.length} tasks, published ${ago(Date.parse(cloudSnap.generatedAt))}; answering: ${cloud.macLine()}`;
+    age < 6 * 3600 * 1000 ? ok(line) : warn(line, "nothing has changed in WorkFlow for a while, or the device that answers is asleep or closed: open WorkFlow on it");
+    const clash = nameClash(AGENT.name);
+    clash ? bad(`"${AGENT.name}" is also the name of Claude on ${clash.host}: both would act on @${AGENT.name}`, `${npx} setup --name <another name>`)
+      : ok(`the name "${AGENT.name}" is this computer's alone`);
+  }
+
+  if (!fromTool) {
+    const started = Date.now();
+    try {
+      const r = await send("ping", {}, 30000);
+      r.status === "applied" ? ok(`a test command was applied by WorkFlow in ${Math.max(1, Math.round((Date.now() - started) / 1000))} s`)
+        : warn("a test command got no answer within 30 s", "WorkFlow on the answering device may be asleep or closed. Commands wait safely and run when it next looks; an iPhone can take minutes");
+    } catch (e) { warn(`couldn't send a test command: ${e.message}`); }
+  }
+
+  const rel = await latestRelease(true);
+  if (!rel) warn("couldn't check npm for a newer release");
+  else if (newerVersion(rel.version, SERVER_INFO.version)) warn(`version ${SERVER_INFO.version}; ${rel.version} is out`, `${npx} update  (and restart Claude Code)`);
+  else ok(`version ${SERVER_INFO.version} is the latest`);
+  const saved = versionOfScript(SAVED_SCRIPT);
+  if (saved && rel && newerVersion(rel.version, saved)) warn(`the scheduled jobs run ${saved}`, cfg.autoUpdate === false ? `auto-update is off: ${npx} update` : "they update themselves within 6 hours, or now with: " + `${npx} update`);
+
+  const scheduled = name => {
+    if (process.platform === "win32") return spawnSync("schtasks", ["/Query", "/TN", name], { encoding: "utf8", windowsHide: true }).status === 0;
+    const r = spawnSync("crontab", ["-l"], { encoding: "utf8" });
+    return r.status === 0 && r.stdout.includes(name === TASK_NAME ? "workflow-companion keepalive" : "workflow-companion wake");
+  };
+  let lastKeepAlive = "";
+  try { lastKeepAlive = fs.readFileSync(KEEPALIVE_LOG, "utf8").trim().split("\n").pop(); } catch (_) {}
+  scheduled(TASK_NAME) ? ok(`keep-alive scheduled${lastKeepAlive ? `; last run ${lastKeepAlive.split(" ")[0].slice(0, 16).replace("T", " ")}: ${lastKeepAlive.split(" ").slice(1).join(" ")}` : ""}`)
+    : warn("the keep-alive isn't scheduled, so the sign-in can end while Claude isn't running", `${npx} setup  (it schedules it)`);
+
+  if (cfg.wakeEnabled) {
+    scheduled(WAKE.taskName) ? ok("waking is on and scheduled every 2 minutes") : bad("waking is on but its scheduled job is missing", `${npx} wake-on`);
+    const bin = cfg.claudeBin || "claude";
+    const v = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 20000, windowsHide: true, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(bin) });
+    v.status === 0 ? ok(`Claude Code runs: ${String(v.stdout).trim().split("\n")[0]}`)
+      : bad(`Claude Code at ${bin} doesn't run`, `reinstall or sign in to Claude Code, then: ${npx} wake-on`);
+    let log = [];
+    try { log = fs.readFileSync(WAKE.log, "utf8").trim().split("\n"); } catch (_) {}
+    const last = log.filter(l => / session exited /.test(l)).pop();
+    if (!last) ok("no sessions yet");
+    else {
+      const when = Date.parse(last.split(" ")[0]);
+      const code = (/session exited (-?\d+)/.exec(last) || [])[1];
+      code === "0" && !/time limit/.test(last) ? ok(`last session ${ago(when)} finished normally`)
+        : warn(`last session ${ago(when)} didn't finish normally: ${last.split(" ").slice(1).join(" ").slice(0, 160)}`, `see ${WAKE.log}`);
+    }
+    if (log.slice(-30).some(l => /SIGN-IN ENDED/.test(l))) warn("the sign-in ended recently (it works now)", "if this PC sleeps for long, leave it awake or check it each morning");
+  } else {
+    warn("waking is off: work waits until you ask Claude on this computer", `${npx} wake-on`);
+  }
+
+  if (!fromTool) {
+    const bin = cfg.claudeBin || "claude";
+    const list = spawnSync(bin, ["mcp", "list"], { encoding: "utf8", timeout: 60000, windowsHide: true, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(bin) });
+    const text = String(list.stdout || "");
+    if (list.status !== 0 && !text) warn("couldn't ask Claude Code which tools it has", `if it isn't installed: ${claudeCodeCommand()}`);
+    else if (!/workflow/i.test(text)) bad("Claude Code doesn't have the companion", claudeCodeCommand());
+    else if (!/@latest/.test(text.split("\n").find(l => /^workflow/i.test(l)) || "")) warn("Claude Code runs a pinned version of the companion", `claude mcp remove workflow -s user, then: ${claudeCodeCommand()}`);
+    else ok("Claude Code has the companion, on @latest");
+  }
+
+  const failing = loadMonitors().filter(m => m.state && !m.state.ok);
+  if (loadMonitors().length) failing.length ? warn(`monitors failing: ${failing.map(m => `${m.name} (${m.state.detail})`).join(", ")}`) : ok(`${loadMonitors().length} monitor(s), all OK`);
+  const pending = loadApprovals().filter(a => a.status === "pending");
+  if (pending.length) warn(`${pending.length} approval(s) waiting for you: ${pending.map(a => `${a.code} on “${a.taskTitle}”`).join(", ")}`);
+  if (cfg.inboxFolder) fs.existsSync(cfg.inboxFolder) ? ok(`inbox folder: ${cfg.inboxFolder}`) : bad(`the inbox folder ${cfg.inboxFolder} is missing`, `${npx} inbox-on --folder "<path>"`);
+  return done();
+}
+
 // ------------------------------------------------------------------ versions (1.6.1)
 
 // Each companion says which version it runs, and keeps itself current.
@@ -2479,6 +2601,7 @@ const HELP = `WorkFlow companion ${SERVER_INFO.version}
   workflow-companion            run the MCP server (what Claude starts)
   workflow-companion setup      sign this computer in to iCloud for WorkFlow (--name, --takeover, --no-browser)
   workflow-companion status     which device answers, how fresh is the snapshot
+  workflow-companion doctor     check everything on this computer and say how to fix what's wrong
   workflow-companion keepalive  renew the sign-in (what the scheduled job runs)
   workflow-companion update     update the scheduled jobs' copy now, and say how to keep Claude Code current
   workflow-companion auto-update on|off   whether the scheduled jobs update themselves (on by default)
@@ -2505,6 +2628,7 @@ Install in one line: see https://github.com/TeamDzX/workflow-companion#install
 if (argv.includes("--print-config")) printConfig();
 else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);
 else if (verb === "setup") setup().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+else if (verb === "doctor") doctorReport().then(r => { console.log(r.text); process.exitCode = r.problems ? 1 : 0; }, e => { console.error(e.message || e); process.exitCode = 1; });
 else if (verb === "status") cloudStateText().then(t => console.log(t), e => { console.error(e.message || e); process.exitCode = 1; });
 else if (verb === "keepalive") keepAlive().then(c => { process.exitCode = c; });
 else if (verb === "update") updateNow().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
