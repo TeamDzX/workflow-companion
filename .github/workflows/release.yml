@@ -1,0 +1,79 @@
+# Releases the companion when a version tag (v1.9.0) is pushed:
+#   1. the tag must match the version in src/index.js
+#   2. the full offline test suite must pass
+#   3. publish to npm (Trusted Publishing: GitHub OIDC, no stored npm token)
+#   4. a GitHub Release with the Claude Desktop bundle and the changelog
+#   5. server.json updated and published to the MCP Registry
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Trusted Publishing needs npm 11.5.1 or later
+        run: npm install -g npm@latest
+
+      - name: The tag matches the source
+        run: |
+          V=$(sed -n 's/^const SERVER_INFO = { name: "workflow", version: "\([0-9.]*\)" };$/\1/p' src/index.js)
+          echo "source $V, tag ${GITHUB_REF_NAME}"
+          [ "v$V" = "$GITHUB_REF_NAME" ] || { echo "::error::tag ${GITHUB_REF_NAME} doesn't match src/index.js ($V)"; exit 1; }
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+
+      - name: Tests
+        run: bash test/run.sh
+
+      - name: Build
+        env:
+          WF_CK_API_TOKEN: ${{ secrets.WF_CK_API_TOKEN }}
+        run: python3 scripts/build.py && node --check dist/package/index.js
+
+      - name: Publish to npm
+        run: cd dist/package && npm publish --provenance --access public
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v v="## $VERSION" '$0==v{on=1;next} /^## /{if(on)exit} on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "WorkFlow companion $VERSION" > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/WorkFlow.mcpb --title "$VERSION" --notes-file notes.md
+
+      - name: Update server.json
+        run: |
+          SHA=$(sha256sum dist/WorkFlow.mcpb | cut -d' ' -f1)
+          python3 - "$VERSION" "$SHA" "$GITHUB_REF_NAME" <<'PY'
+          import json, sys
+          version, sha, tag = sys.argv[1:4]
+          s = json.load(open("server.json"))
+          s["version"] = version
+          for p in s["packages"]:
+              if p["registryType"] == "npm":
+                  p["version"] = version
+              else:
+                  p["identifier"] = f"https://github.com/TeamDzX/workflow-companion/releases/download/{tag}/WorkFlow.mcpb"
+                  p["fileSha256"] = sha
+          json.dump(s, open("server.json", "w"), indent=2)
+          open("server.json", "a").write("\n")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "server.json: $VERSION" && git push origin HEAD:main || echo "server.json unchanged"
+
+      - name: Publish to the MCP Registry
+        continue-on-error: true
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

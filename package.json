@@ -1,0 +1,38 @@
+{
+  "name": "@opticell/workflow-companion",
+  "version": "0.0.0-set-by-build",
+  "mcpName": "io.github.TeamDzX/workflow-companion",
+  "description": "Lets Claude on Windows or Linux work in your WorkFlow tasks, notes and projects, through WorkFlow for Mac and your own iCloud. An MCP server.",
+  "keywords": [
+    "mcp",
+    "claude",
+    "workflow",
+    "tasks",
+    "icloud",
+    "companion"
+  ],
+  "homepage": "https://www.opticell-limited.com/companion",
+  "author": "Opticell Limited",
+  "license": "MIT",
+  "bin": {
+    "workflow-companion": "index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TeamDzX/workflow-companion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TeamDzX/workflow-companion/issues"
+  }
+}

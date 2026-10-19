@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.1
+- **`workflow-companion doctor`** checks everything on this computer in one
+  go: Node.js, the iCloud sign-in, whether WorkFlow is publishing and
+  answering (with a test command), the name, the version, the scheduled
+  jobs, Claude Code, the last session, monitors and approvals. It says how
+  to fix whatever is wrong. Claude can run it too (`workflow_doctor`).
+- **Released by GitHub.** Each release is tested, published to npm with
+  provenance, attached to a GitHub Release and sent to the MCP Registry by
+  GitHub Actions.
+
 ## 1.8.0
 The companion now does useful work on its computer by itself.
 - **Monitors.** Website, port, disk, process, file and (yours only) command

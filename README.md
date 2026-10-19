@@ -180,6 +180,7 @@ npx -y @opticell/workflow-companion wake-on
 | `workflow-companion` | Runs the MCP server. This is what Claude starts. |
 | `workflow-companion setup` | Signs this computer in. Takes `--web-token` to skip the prompt. |
 | `workflow-companion status` | Which device answers, how fresh the snapshot is, any receipts that arrived late. |
+| `workflow-companion doctor` | Checks everything on this computer and says how to fix what's wrong. Start here when something isn't working. |
 | `workflow-companion keepalive` | Renews the sign-in. The scheduled job runs this. |
 | `workflow-companion update` | Updates the scheduled jobs' copy to the latest release now, and shows how to keep Claude Code on `@latest`. |
 | `workflow-companion auto-update on\|off` | Whether the scheduled jobs update themselves (on by default). |
