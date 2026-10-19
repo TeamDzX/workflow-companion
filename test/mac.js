@@ -1,6 +1,7 @@
 // The fake Mac: every 500 ms applies BridgeCommands (unless asleep).
 const fs = require("fs"); const STATE = process.env.MOCK_STATE;
-setInterval(() => {
+const { locked } = require("./mock.js");
+setInterval(() => locked(() => {
   let s;
   try { s = JSON.parse(fs.readFileSync(STATE, "utf8")); } catch (_) { return; }   // mid-write: next tick
   if (s.asleep) return;
@@ -19,4 +20,4 @@ setInterval(() => {
     delete s.records[name];
   }
   const t = `${STATE}.${process.pid}.tmp`; fs.writeFileSync(t, JSON.stringify(s)); fs.renameSync(t, STATE);
-}, 500);
+}), 500);

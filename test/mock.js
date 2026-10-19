@@ -4,6 +4,22 @@ const STATE = process.env.MOCK_STATE;
 // Several processes share this file: write whole files only (temp + rename),
 // so a reader never sees half of one.
 const load = () => JSON.parse(fs.readFileSync(STATE, "utf8"));
+// One process at a time reads-changes-writes the state (the fake Mac uses
+// the same lock), or one undoes another's change: a rotated token lost that
+// way looks like Apple refusing a stale one.
+const pause = new Int32Array(new SharedArrayBuffer(4));
+function locked(fn) {
+  const lock = STATE + ".lock";
+  for (let i = 0; ; i++) {
+    try { fs.mkdirSync(lock); break; }
+    catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 3000) fs.rmdirSync(lock); } catch (_) {}
+      Atomics.wait(pause, 0, 0, 5);
+    }
+  }
+  try { return fn(); } finally { try { fs.rmdirSync(lock); } catch (_) {} }
+}
 const save = s => { const t = `${STATE}.${process.pid}.tmp`; fs.writeFileSync(t, JSON.stringify(s)); fs.renameSync(t, STATE); };
 const snap = { generatedAt: new Date().toISOString(),
   tasks: [
@@ -19,7 +35,7 @@ const snap = { generatedAt: new Date().toISOString(),
   ],
   notes: [{ id: "N1", title: "Ideas", body: "@Server summarise the logs" }, { id: "N2", title: "Other", body: "@serverless is a word" }],
   projects: [{ name: "Ops", isShared: false }, { name: "Client", isShared: true }] };
-module.exports = { snap };
+module.exports = { snap, locked };
 // A test can serve a different snapshot by writing it to MOCK_STATE.snap
 // (and changing the snapshot record's sha, as the Mac does).
 const snapOverride = () => { try { return JSON.parse(fs.readFileSync(STATE + ".snap", "utf8")); } catch (_) { return null; } };
@@ -27,6 +43,9 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts = {}) => {
   // A test's own local server (monitors, 1.8) is reached for real.
   if (String(url).startsWith("http://127.0.0.1")) return realFetch(url, opts);
+  return locked(() => answer(url, opts));
+};
+function answer(url, opts) {
   const s = load();
   const reply = (status, body, token) => ({ ok: status < 300, status, statusText: "x",
     headers: { get: k => (k === "x-apple-cloudkit-web-auth-token" ? token : null) }, json: async () => body,
@@ -70,4 +89,4 @@ globalThis.fetch = async (url, opts = {}) => {
   }
   save(s);
   return reply(200, out, s.token);
-};
+}
