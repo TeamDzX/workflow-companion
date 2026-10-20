@@ -181,6 +181,7 @@ npx -y @opticell/workflow-companion wake-on
 | `workflow-companion setup` | Signs this computer in. Takes `--web-token` to skip the prompt. |
 | `workflow-companion status` | Which device answers, how fresh the snapshot is, any receipts that arrived late. |
 | `workflow-companion doctor` | Checks everything on this computer and says how to fix what's wrong. Start here when something isn't working. |
+| `workflow-companion canary` | Runs the daily self-test now. `canary on\|off`, `canary at HH:MM`. |
 | `workflow-companion keepalive` | Renews the sign-in. The scheduled job runs this. |
 | `workflow-companion update` | Updates the scheduled jobs' copy to the latest release now, and shows how to keep Claude Code on `@latest`. |
 | `workflow-companion auto-update on\|off` | Whether the scheduled jobs update themselves (on by default). |
@@ -230,6 +231,13 @@ move to `Filed/<date>`. `--assign` puts them in this assistant's queue.
 **Notifications.** A notice on this computer when work arrives, a monitor
 changes, an approval is answered, a session needs attention, or the iCloud
 sign-in has ended (with the command that fixes it).
+
+**Daily self-test (1.9).** With waking on, once a day (07:30, or
+`canary at HH:MM`) the companion proves the whole chain still works: WorkFlow
+applies its commands, Claude Code runs and can write, and the change comes
+back. A pass quietly updates its "⚙︎ <name> daily self-test" task; a failure
+comments there, which reaches your phone, naming the step and the fix.
+`workflow-companion canary` runs it now; `canary off` stops it.
 
 **Session reports.** After each session that changed something, a short
 report is attached to its task: what it was asked, what it changed, any

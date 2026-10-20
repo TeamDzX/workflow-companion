@@ -124,6 +124,8 @@ check "setup tells you how to switch waking on" "grep -q 'workflow-companion wak
   echo "echo \"\$*\" > '$W/claude.args'; cat > '$W/claude.prompt'; echo run >> '$W/claude.runs'"
   echo '[ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"'
   echo "[ -n \"\${FAKE_SEND:-}\" ] && node '$HERE/drive.js' '[[\"workflow_comment\",{\"task\":\"T3\",\"text\":\"picked up\"}]]' > /dev/null"
+  # 1.9: answer a self-test the way Claude would, by setting the status line.
+  echo "if grep -q 'scheduled self-test' '$W/claude.prompt' && [ -n \"\${FAKE_CANARY_FAIL:-}\" ]; then echo \"You've reached your usage limit\"; exit 1; fi; if grep -q 'scheduled self-test' '$W/claude.prompt' && [ -z \"\${FAKE_EXIT:-}\" ]; then T=\$(sed -n 's/.*with task \"\\([^\"]*\\)\".*/\\1/p' '$W/claude.prompt'); N=\$(sed -n 's/.*text \"self-test \\([0-9a-f]*\\)\".*/\\1/p' '$W/claude.prompt'); node '$HERE/drive.js' \"[[\\\"workflow_set_status_line\\\",{\\\"task\\\":\\\"\$T\\\",\\\"text\\\":\\\"self-test \$N\\\"}]]\" > /dev/null; fi"
   echo 'exit ${FAKE_EXIT:-0}'
 } > "$W/bin/fake-claude"
 chmod +x "$W/bin/fake-claude"
@@ -137,6 +139,9 @@ PATH="$W/bin:$PATH" node -r ./mock.js "$SERVER" wake-on --claude "$W/bin/fake-cl
 check "wake-on never schedules while WF_NO_SCHEDULE is set" "grep -q 'not scheduled' $W/wk0b.out && [ ! -f $W/bin/crontab.txt ]"
 PATH="$W/bin:$PATH" WF_NO_SCHEDULE= node -r ./mock.js "$SERVER" wake-on --claude "$W/bin/fake-claude" > "$W/wk1.out" 2>&1
 check "wake-on schedules a check every 2 minutes in cron" "grep -q 'cron, every 2 minutes' $W/wk1.out && grep -q 'workflow-companion.js\" wake' $W/bin/crontab.txt"
+# The daily self-test (1.9) is due whenever the tests run after 07:30; it has
+# its own tests below, and stays out of the counts until then.
+node -r ./mock.js "$SERVER" canary off > /dev/null
 node -r ./mock.js "$SERVER" status > "$W/wk2.out" 2>&1
 check "status says waking is on" "grep -q 'waking      on' $W/wk2.out"
 wake
@@ -242,6 +247,7 @@ node bump.js s17 _a Alex "@Server once more"
 wake
 check "before Production has the field, presence is still written without it" "[ \"\$(activity)\" = none ] && [ \"\$(st 's.records[\"companion-server\"].fields.appVersion.value')\" != undefined ] && grep -q activityFieldMissingUntil $HOME/.workflow-companion/config.json"
 node -e "const f=process.env.MOCK_STATE,s=require(f);s.rejectFields=[];require('fs').writeFileSync(f,JSON.stringify(s))"
+node -e "const f=process.env.HOME+'/.workflow-companion/config.json',c=require(f);delete c.activityFieldMissingUntil;require('fs').writeFileSync(f,JSON.stringify(c))"
 
 # 1.8: monitors, approvals, session reports, the inbox folder, notifications.
 export WF_NOTIFY_LOG="$W/notify.log"
@@ -347,6 +353,29 @@ cfg "delete c.latestRelease"
 node -r ./mock.js "$SERVER" keepalive
 check "with auto-update on the scheduled run updates itself" "[ \"\$(savedver)\" = 9.9.10 ] && grep -q 'updated from 9.9.9 to 9.9.10' $HOME/.workflow-companion/keepalive.log"
 rm -f "$MOCK_STATE.release" "$MOCK_STATE.tgz"
+
+# 1.9: the daily self-test.
+canary() { PATH="$W/bin:$PATH" node -r ./mock.js "$SERVER" canary "$@"; }
+node -r ./mock.js "$SERVER" canary on > /dev/null
+applied_json() { st 'JSON.stringify(s.applied)'; }
+node mac.js & MAC=$!
+canary > "$W/c1.out" 2>&1
+check "the self-test passes end to end and says how long Claude took" "grep -q '✓ Passed: Claude answered in' $W/c1.out"
+check "it creates its own task once, and a pass only updates the status line" "applied_json | grep -q '⚙︎ Server daily self-test' && applied_json | grep -q '✓ Self-test passed' && ! applied_json | grep -q 'My daily self-test'"
+n_create=$(st 's.applied.filter(c=>c.op==="create_task"&&c.title==="⚙︎ Server daily self-test").length')
+FAKE_CANARY_FAIL=1 canary > "$W/c2.out" 2>&1
+check "a failure names the step and the fix, comments on its task, and needs attention" "grep -q '✗ Failed at Claude session: Claude usage limit reached' $W/c2.out && grep -q 'fix:' $W/c2.out && applied_json | grep -q '✗ My daily self-test failed' && [ \"\$(activity)\" = attention ]"
+check "it doesn't make a second task" "[ \"\$(st 's.applied.filter(c=>c.op===\"create_task\"&&c.title===\"⚙︎ Server daily self-test\").length')\" = $n_create ]"
+canary > "$W/c3.out" 2>&1
+check "a recovery says so" "grep -q '✓ Passed' $W/c3.out && applied_json | grep -q 'self-test passes again'"
+PATH="$W/bin:$PATH" node -r ./mock.js "$SERVER" doctor > "$W/c4.out" 2>&1
+check "doctor shows the last self-test" "grep -q '✓ last self-test passed' $W/c4.out"
+node -r ./mock.js "$SERVER" canary at 00:00 > /dev/null
+node -e "const f=process.env.HOME+'/.workflow-companion/config.json',c=require(f);delete c.canaryLastDay;require('fs').writeFileSync(f,JSON.stringify(c))"
+before_tests=$(grep -c 'self-test:' "$HOME/.workflow-companion/wake.log")
+PATH="$W/bin:$PATH" wake; PATH="$W/bin:$PATH" wake
+kill $MAC
+check "the scheduled job runs it once a day, when nothing else is waiting" "[ \$(grep -c 'self-test:' $HOME/.workflow-companion/wake.log) = \$((before_tests + 1)) ]"
 
 PATH="$W/bin:$PATH" WF_NO_SCHEDULE= node -r ./mock.js "$SERVER" wake-off > /dev/null 2>&1
 check "wake-off removes the schedule" "! grep -q 'workflow-companion wake' $W/bin/crontab.txt"

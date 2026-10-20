@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "1.8.2" };
+const SERVER_INFO = { name: "workflow", version: "1.9.0" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -1599,7 +1599,7 @@ function killTree(pid) {
   else { try { process.kill(-pid, "SIGTERM"); } catch (_) { try { process.kill(pid, "SIGTERM"); } catch (_) {} } }
 }
 
-function runSession(cfg, prompt) {
+function runSession(cfg, prompt, limitMs) {
   const { spawn } = require("child_process");
   const bin = cfg.claudeBin || "claude";
   const args = ["-p", "--allowedTools", cfg.wakeAllowedTools || "mcp__workflow"];
@@ -1609,7 +1609,7 @@ function runSession(cfg, prompt) {
   const shell = process.platform === "win32" && /\.(cmd|bat)$/i.test(bin);
   const cwd = cfg.wakeWorkDir && fs.existsSync(cfg.wakeWorkDir) ? cfg.wakeWorkDir : os.homedir();
   // WF_WAKE_MAX_SECONDS is for the tests.
-  const limit = process.env.WF_WAKE_MAX_SECONDS ? Number(process.env.WF_WAKE_MAX_SECONDS) * 1000 : (cfg.wakeMaxMinutes || WAKE.maxMinutes) * 60000;
+  const limit = process.env.WF_WAKE_MAX_SECONDS ? Number(process.env.WF_WAKE_MAX_SECONDS) * 1000 : limitMs || (cfg.wakeMaxMinutes || WAKE.maxMinutes) * 60000;
   return new Promise(resolve => {
     let out = "", timedOut = false, child;
     try {
@@ -1675,7 +1675,12 @@ async function wake() {
     const live = new Set(items.map(i => i.key));
     for (const k of Object.keys(st.seen)) if (!live.has(k)) { delete st.seen[k]; delete st.attempts[k]; }
     const fresh = items.filter(i => st.seen[i.key] !== i.sig);
-    if (!fresh.length) { saveAtomic(WAKE.state, JSON.stringify(st)); return 0; }
+    if (!fresh.length) {
+      saveAtomic(WAKE.state, JSON.stringify(st));
+      // 1.9: the daily self-test, when nothing else is waiting.
+      if (canaryDue(readJSON(CP.config, cfg))) await runCanary(readJSON(CP.config, cfg));
+      return 0;
+    }
 
     // Marked handled BEFORE the session: re-running half-done work unattended
     // is worse than dropping it. A session that wrote nothing at all is the
@@ -2266,6 +2271,118 @@ async function inboxCLI(on) {
   return 0;
 }
 
+// ------------------------------------------------------------------ canary (1.9)
+//
+// A daily self-test of the whole chain, so a break shows up in the morning
+// rather than when something needs doing. Once a day (07:30 by default, only
+// with waking on), in the scheduled job:
+//   1. doctor's checks
+//   2. its own "⚙︎ <name> daily self-test" task exists: creating it proves
+//      WorkFlow applies this companion's commands
+//   3. a tiny real Claude session writes a one-off code into that task's
+//      status line: Claude Code is signed in, has the tools, and can write
+//   4. the code comes back in WorkFlow's published snapshot: the round trip
+// A pass only updates the status line (no comment, so no notification). A
+// failure posts one comment naming the step and the fix, which reaches the
+// phone; a recovery says so too.
+
+const CANARY_DEFAULT_AT = "07:30";
+const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function canaryTitle() { return `⚙︎ ${AGENT.name} daily self-test`; }
+
+function canaryDue(cfg, now = new Date()) {
+  if (!cfg || !cfg.wakeEnabled || cfg.canary === false) return false;
+  if (cfg.canaryLastDay === localDay(now)) return false;
+  const [h, m] = String(cfg.canaryAt || CANARY_DEFAULT_AT).split(":").map(Number);
+  return now.getHours() * 60 + now.getMinutes() >= (h || 0) * 60 + (m || 0);
+}
+
+async function runCanary(cfg) {
+  const started = Date.now();
+  const host = os.hostname();
+  updateConfig(c => { c.canaryLastDay = localDay(); });   // once a day, even if this dies part-way
+  const fail = (step, detail, fix) => ({ ok: false, step, detail, fix });
+  let result, taskID = null;
+  try {
+    result = await (async () => {
+      // Found first, so any failure below can be reported on it.
+      const existing = (cloudSnap && cloudSnap.tasks || []).find(t => t.title === canaryTitle());
+      if (existing) taskID = existing.id;
+      const health = await doctorReport({ fromTool: true, forCanary: true });
+      if (health.problems) {
+        const first = health.text.split("\n").findIndex(l => l.startsWith("  ✗"));
+        const lines = health.text.split("\n");
+        return fail("health check", lines[first].replace(/^\s*✗\s*/, ""), (lines[first + 1] || "").replace(/^\s*fix:\s*/, "") || "run: npx -y @opticell/workflow-companion@latest doctor");
+      }
+      if (!taskID) {
+        const r = await send("create_task", { title: canaryTitle(), priority: "Low", hasDueDate: false,
+          notes: `${AGENT.name} on ${host} checks itself here once a day: WorkFlow, iCloud and Claude Code, end to end. A pass updates the status line; a failure comments, so you hear about it. Leave this task be.` }, 60000);
+        if (r.status !== "applied" || !r.taskID) return fail("WorkFlow applying commands", "WorkFlow didn't apply a command within a minute", "open WorkFlow on the Mac or iPhone that answers the companion (doctor shows which)");
+        taskID = r.taskID;
+      }
+      const nonce = require("crypto").randomBytes(3).toString("hex");
+      const t0 = Date.now();
+      const r = await runSession(cfg, `This is ${AGENT.name}'s scheduled self-test on ${host}. Do exactly one thing: call workflow_set_status_line with task "${taskID}" and text "self-test ${nonce}". Don't comment, don't read or change anything else, then stop.`, 5 * 60000);
+      if (r.timedOut) return fail("Claude session", "it didn't finish within 5 minutes", `a prompt may be waiting on ${host}; check Claude Code there`);
+      if (r.code !== 0) return fail("Claude session", attentionReason(r.out, `Claude Code exited with ${r.code}`), "run claude on that computer and check it's signed in and has usage left");
+      const answered = Math.round((Date.now() - t0) / 1000);
+      for (let i = 0; i < 12; i++) {
+        await cloud.load(true);
+        const t = (cloudSnap.tasks || []).find(x => x.id === taskID);
+        if (t && String(t.pinnedNote || "").includes(nonce)) return { ok: true, answered };
+        await delay(15000);
+      }
+      return fail("the round trip", "Claude's change didn't come back through WorkFlow within 3 minutes", "WorkFlow on the answering device may be asleep or closed; run doctor");
+    })();
+  } catch (e) {
+    result = fail(e instanceof SignInNeeded ? "iCloud sign-in" : "the self-test", String(e.message).split("\n")[0],
+      e instanceof SignInNeeded ? "npx -y @opticell/workflow-companion@latest setup" : "run doctor on that computer");
+  }
+  const when = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const wasFailing = cfg.canaryLastOk === false;
+  updateConfig(c => { c.canaryLastOk = result.ok; c.canaryLast = Object.assign({ at: new Date().toISOString() }, result); });
+  logWake(`self-test: ${result.ok ? `passed (Claude answered in ${result.answered} s)` : `FAILED at ${result.step}: ${result.detail}`}`);
+  try {
+    if (taskID) {
+      await send("update_task", { taskID, pinnedNote: result.ok ? `✓ Self-test passed ${when} on ${host}: Claude answered in ${result.answered} s.` : `✗ Self-test failed ${when} on ${host}: ${result.step}.` });
+      if (!result.ok) await send("add_comment", { taskID, text: `✗ My daily self-test failed on ${host} (${result.step}): ${result.detail}.\nFix: ${result.fix}.` });
+      else if (wasFailing) await send("add_comment", { taskID, text: `✓ My daily self-test passes again on ${host}.` });
+    }
+  } catch (_) { /* reported on the PC below */ }
+  if (!result.ok) {
+    notify(`${AGENT.name}: self-test failed`, `${result.step}: ${result.detail}. Fix: ${result.fix}`);
+    await reportActivity("attention", { reason: `self-test failed (${result.step}): ${result.detail}`.slice(0, 150) }).catch(() => {});
+  }
+  return result;
+}
+
+async function canaryCLI() {
+  const sub = argv[argv.indexOf("canary") + 1];
+  const cfg = readJSON(CP.config, null);
+  if (!cfg) { console.error(signInHelp("Not signed in yet.")); return 2; }
+  if (sub === "off" || sub === "on") {
+    updateConfig(c => { c.canary = sub === "on"; });
+    console.log(sub === "on" ? `The daily self-test is on, at ${cfg.canaryAt || CANARY_DEFAULT_AT} (it needs waking on).` : "The daily self-test is off.");
+    return 0;
+  }
+  if (sub === "at") {
+    const at = argv[argv.indexOf("at") + 1] || "";
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(at)) { console.error("Give a time as HH:MM, e.g. canary at 07:30"); return 2; }
+    updateConfig(c => { c.canaryAt = at; });
+    console.log(`The daily self-test runs at ${at}.`);
+    return 0;
+  }
+  if (!cfg.claudeBin) { console.error("The self-test runs Claude Code, so waking has to be set up first: workflow-companion wake-on"); return 2; }
+  if (!takeWakeLock(cfg.wakeMaxMinutes || WAKE.maxMinutes)) { console.error("A session is running; try again when it has finished."); return 1; }
+  try {
+    await cloud.load(true);
+    console.log("Running the self-test (up to about 8 minutes)…");
+    const r = await runCanary(Object.assign({}, cfg, readJSON(CP.config, {})));
+    console.log(r.ok ? `✓ Passed: Claude answered in ${r.answered} s, and its change came back through WorkFlow.` : `✗ Failed at ${r.step}: ${r.detail}\n  fix: ${r.fix}`);
+    return r.ok ? 0 : 1;
+  } finally { try { fs.unlinkSync(WAKE.lock); } catch (_) {} }
+}
+
 // ------------------------------------------------------------------ doctor (1.8.1)
 //
 // Checks the whole chain on this computer in one go and says how to fix
@@ -2274,7 +2391,7 @@ async function inboxCLI(on) {
 // Claude Code, and what the last session did. `fromTool` skips the checks
 // that would be odd from inside a Claude session (asking Claude Code about
 // itself).
-async function doctorReport({ fromTool = false } = {}) {
+async function doctorReport({ fromTool = false, forCanary = false } = {}) {
   const npx = "npx -y @opticell/workflow-companion@latest";
   const lines = [`WorkFlow companion ${SERVER_INFO.version} on ${os.hostname()}, as "${AGENT.name}"`, ""];
   let problems = 0, warnings = 0;
@@ -2374,6 +2491,12 @@ async function doctorReport({ fromTool = false } = {}) {
     else ok("Claude Code has the companion, on @latest");
   }
 
+  if (!forCanary && cfg.wakeEnabled && cfg.canary !== false) {
+    const last = cfg.canaryLast;
+    if (!last) ok(`daily self-test on, at ${cfg.canaryAt || CANARY_DEFAULT_AT}; it hasn't run yet`);
+    else if (last.ok) ok(`last self-test passed ${ago(Date.parse(last.at))}`);
+    else bad(`last self-test failed ${ago(Date.parse(last.at))} (${last.step}): ${last.detail}`, last.fix);
+  }
   const failing = loadMonitors().filter(m => m.state && !m.state.ok);
   if (loadMonitors().length) failing.length ? warn(`monitors failing: ${failing.map(m => `${m.name} (${m.state.detail})`).join(", ")}`) : ok(`${loadMonitors().length} monitor(s), all OK`);
   const pending = loadApprovals().filter(a => a.status === "pending");
@@ -2609,6 +2732,7 @@ const HELP = `WorkFlow companion ${SERVER_INFO.version}
   workflow-companion setup      sign this computer in to iCloud for WorkFlow (--name, --takeover, --no-browser)
   workflow-companion status     which device answers, how fresh is the snapshot
   workflow-companion doctor     check everything on this computer and say how to fix what's wrong
+  workflow-companion canary     run the daily self-test now (also: canary on|off, canary at HH:MM)
   workflow-companion keepalive  renew the sign-in (what the scheduled job runs)
   workflow-companion update     update the scheduled jobs' copy now, and say how to keep Claude Code current
   workflow-companion auto-update on|off   whether the scheduled jobs update themselves (on by default)
@@ -2639,6 +2763,7 @@ if (require.main !== module) {
   if (argv.includes("--print-config")) printConfig();
   else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);
   else if (verb === "setup") setup().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
+  else if (verb === "canary") canaryCLI().then(c => { process.exitCode = c; }, e => { console.error(e.message || e); process.exitCode = 1; });
   else if (verb === "doctor") doctorReport().then(r => { console.log(r.text); process.exitCode = r.problems ? 1 : 0; }, e => { console.error(e.message || e); process.exitCode = 1; });
   else if (verb === "status") cloudStateText().then(t => console.log(t), e => { console.error(e.message || e); process.exitCode = 1; });
   else if (verb === "keepalive") keepAlive().then(c => { process.exitCode = c; });

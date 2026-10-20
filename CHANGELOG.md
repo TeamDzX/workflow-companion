@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.9.0
+- **A daily self-test.** Once a day (07:30 unless you change it with
+  `canary at HH:MM`), with waking on, the companion checks itself end to
+  end: doctor's checks, a command WorkFlow must apply, and a tiny real
+  Claude session whose change has to come back through WorkFlow. A pass
+  only updates the status line of its own "⚙︎ <name> daily self-test"
+  task, so nothing pings you. A failure comments there (reaching your phone)
+  with the step that failed and the fix, shows "needs attention" in Who's
+  Bridged, and a notice on the computer; a recovery says so. Run it now with
+  `workflow-companion canary`; `canary off` stops it. Costs one very short
+  Claude session a day.
+- `doctor` shows the last self-test.
+
 ## 1.8.2
 - **Shared projects never start a session.** A task assigned to the
   companion in a shared project no longer wakes it, or appears in its queue:
