@@ -52,9 +52,9 @@ manifest = {
             "type": "string", "title": "Name in WorkFlow", "required": False, "default": "Companion",
             "description": "What Claude on this computer is called in WorkFlow. Assign a task to this name, or write @name in a comment or note, to hand it work. One word, not \"Claude\"."}},
     "tools": [{"name": n, "description": d} for n, d in [
-        ("workflow_queue", "Tasks assigned to Claude"), ("workflow_get_task", "One task with its thread"),
-        ("workflow_comment", "Reply on a task"), ("workflow_create_task", "Create a task"),
-        ("workflow_list_notes", "The Notepad"), ("workflow_state", "Is the Mac awake")]],
+        ("workflow_queue", "Your inbox"), ("workflow_list", "Tasks, notes, projects, documents"),
+        ("workflow_get", "One task with its thread"), ("workflow_comment", "Reply on a task"),
+        ("workflow_update_task", "Status line, checklist, fields"), ("workflow_state", "Is the bridge working")]],
     "compatibility": {"platforms": ["win32", "linux", "darwin"], "runtimes": {"node": ">=18.0.0"}},
     "keywords": ["tasks", "projects", "workflow", "icloud"],
 }

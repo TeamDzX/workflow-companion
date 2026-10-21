@@ -125,7 +125,7 @@ check "setup tells you how to switch waking on" "grep -q 'workflow-companion wak
   echo '[ -n "${FAKE_SLEEP:-}" ] && sleep "$FAKE_SLEEP"'
   echo "[ -n \"\${FAKE_SEND:-}\" ] && node '$HERE/drive.js' '[[\"workflow_comment\",{\"task\":\"T3\",\"text\":\"picked up\"}]]' > /dev/null"
   # 1.9: answer a self-test the way Claude would, by setting the status line.
-  echo "if grep -q 'scheduled self-test' '$W/claude.prompt' && [ -n \"\${FAKE_CANARY_FAIL:-}\" ]; then echo \"You've reached your usage limit\"; exit 1; fi; if grep -q 'scheduled self-test' '$W/claude.prompt' && [ -z \"\${FAKE_EXIT:-}\" ]; then T=\$(sed -n 's/.*with task \"\\([^\"]*\\)\".*/\\1/p' '$W/claude.prompt'); N=\$(sed -n 's/.*text \"self-test \\([0-9a-f]*\\)\".*/\\1/p' '$W/claude.prompt'); node '$HERE/drive.js' \"[[\\\"workflow_set_status_line\\\",{\\\"task\\\":\\\"\$T\\\",\\\"text\\\":\\\"self-test \$N\\\"}]]\" > /dev/null; fi"
+  echo "if grep -q 'scheduled self-test' '$W/claude.prompt' && [ -n \"\${FAKE_CANARY_FAIL:-}\" ]; then echo \"You've reached your usage limit\"; exit 1; fi; if grep -q 'scheduled self-test' '$W/claude.prompt' && [ -z \"\${FAKE_EXIT:-}\" ]; then T=\$(sed -n 's/.*with task \"\\([^\"]*\\)\".*/\\1/p' '$W/claude.prompt'); N=\$(sed -n 's/.*status_line \"self-test \\([0-9a-f]*\\)\".*/\\1/p' '$W/claude.prompt'); node '$HERE/drive.js' \"[[\\\"workflow_update_task\\\",{\\\"task\\\":\\\"\$T\\\",\\\"status_line\\\":\\\"self-test \$N\\\"}]]\" > /dev/null; fi"
   echo 'exit ${FAKE_EXIT:-0}'
 } > "$W/bin/fake-claude"
 chmod +x "$W/bin/fake-claude"
@@ -392,5 +392,32 @@ node -e "const f=process.env.MOCK_STATE,s=require(f);s.expired=true;require('fs'
 node -r ./mock.js "$SERVER" doctor > "$W/d3.out" 2>&1
 check "an ended sign-in is named, with the command that fixes it" "grep -q '✗ the iCloud sign-in has ended' $W/d3.out && grep -q 'fix: npx -y @opticell/workflow-companion@latest setup' $W/d3.out"
 node -e "const f=process.env.MOCK_STATE,s=require(f);s.expired=false;require('fs').writeFileSync(f,JSON.stringify(s))"
+
+# 2.0: the merged tools. Old names still answer; only the 15 are listed.
+listed() { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | node -r ./mock.js "$SERVER" --cloud 2>/dev/null | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const t=JSON.parse(d.trim().split('\n').pop()).result.tools;console.log(t.length, t.map(x=>x.name).join(' '))})"; }
+check "fifteen tools are listed, none of the old ones" "[ \"\$(listed | cut -d' ' -f1)\" = 15 ] && ! listed | grep -qw workflow_set_status_line && listed | grep -qw workflow_list"
+node mac.js & MAC=$!
+n0=$(st 's.applied.length')
+node drive.js '[["workflow_list",{"query":"backup"}],["workflow_list",{"kind":"notes"}],["workflow_get",{"id":"quarterly"}],["workflow_get",{"id":"N1"}],["workflow_get",{"id":"nothing like it"}],
+  ["workflow_update_task",{"task":"T1","status_line":"half way","check_subtasks":["draft"],"rename_subtasks":[{"from":"draft","to":"first draft"}]}],
+  ["workflow_comment",{"task":"T2","text":"over to you","hand_to":"Claude"}],["workflow_comment",{"task":"T2"}],
+  ["workflow_note",{"action":"reply","note":"Ideas","text":"noted"}],["workflow_note",{"action":"tidy"}],
+  ["workflow_attach",{"file":"'"$W"'/report.pdf","task":"T1","project":"Ops"}],["workflow_attach",{"file":"'"$W"'/report.pdf","task":"T1"}],
+  ["workflow_approval",{"action":"check"}],["workflow_state",{"check":"ping"}],["workflow_set_status_line",{"task":"T1","text":"old name"}]]' > "$W/m1.out"
+kill $MAC
+new_ops() { node -e "const s=require(process.env.MOCK_STATE);console.log(JSON.stringify(s.applied.slice($n0)))"; }
+check "list searches tasks" "grep -A1 '^#1 ok' $W/m1.out | grep -q 'Rotate the backups' && ! sed -n '/^#1/,/^#2/p' $W/m1.out | grep -q 'Quarterly'"
+check "list kind notes is the Notepad" "sed -n '/^#2/,/^#3/p' $W/m1.out | grep -q 'Ideas'"
+check "get finds a task by title and a note by id" "sed -n '/^#3/,/^#4/p' $W/m1.out | grep -q 'comment(s):' && sed -n '/^#4/,/^#5/p' $W/m1.out | grep -q 'id N1'"
+check "get says when nothing matches" "grep -q '#5 ERR Nothing matches' $W/m1.out"
+check "status line, ticks and a rename go as one command" "new_ops | node -e \"const a=JSON.parse(require('fs').readFileSync(0));const u=a.filter(c=>c.op==='update_task'&&c.pinnedNote==='half way');process.exit(u.length===1&&u[0].checkSubtasks[0]==='draft'&&u[0].renameSubtasks[0].to==='first draft'?0:1)\""
+check "hand_to reassigns and @mentions the assistant" "new_ops | grep -q '\"assignee\":\"Claude\"' && new_ops | grep -q '@Claude handing this over to you. over to you'"
+check "a comment without text is refused" "grep -q '#8 ERR Give text.' $W/m1.out"
+check "note reply appends to the note" "new_ops | grep -q '\"op\":\"update_note\".*\"appendText\":\"noted\"'"
+check "a bad action is named" "grep -q '#10 ERR action is create, reply or convert.' $W/m1.out"
+check "attach wants exactly one target, and attaches to a task" "grep -q '#11 ERR Give exactly one of task, project or document.' $W/m1.out && grep -q '#12 ok  \[ok\] did attach_file' $W/m1.out"
+check "approval check needs a code" "grep -q '#13 ERR Give code.' $W/m1.out"
+check "state check ping round-trips" "grep -q '#14 ok  \[ok\] did ping' $W/m1.out"
+check "an old tool name still works" "grep -q '#15 ok  \[ok\] did update_task' $W/m1.out && new_ops | grep -q '\"pinnedNote\":\"old name\"'"
 
 exit $fail

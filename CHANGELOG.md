@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.0.0
+- **15 tools instead of 37.** Related tools are merged, so every session
+  starts with a shorter, clearer list (about a fifth fewer tokens up front)
+  and Claude has fewer near-duplicates to choose between:
+  - `workflow_list` (kind: tasks, notes, projects, documents, comments), now
+    with `query`, `project`, `status` and `limit` for tasks and notes too;
+  - `workflow_get` finds a task, note or document by id, WF-number or title;
+  - `workflow_update_task` takes `status_line` and the whole checklist
+    (`check_subtasks`, `uncheck_subtasks`, `add_subtasks`, `remove_subtasks`,
+    `rename_subtasks`) in one call, so one WorkFlow command instead of several;
+  - `workflow_comment` takes `hand_to` (was `workflow_hand_off`);
+  - `workflow_note` (create / reply / convert), `workflow_attach` (task,
+    project or new document version), `workflow_approval` (request / check /
+    run), and `workflow_state` with `check: ping` or `doctor`;
+  - house rules lead `workflow_queue`.
+- **The old names still work.** They are no longer listed, but a prompt, a
+  saved permission or an older WorkFlow app that calls one gets the same
+  result as before.
+- Read-only tools say so (MCP `readOnlyHint`), so clients that honour it can
+  run them without asking.
+
 ## 1.9.0
 - **A daily self-test.** Once a day (07:30 unless you change it with
   `canary at HH:MM`), with waking on, the companion checks itself end to

@@ -270,15 +270,25 @@ approved commands it ran, and its last words.
 
 ## Tools
 
-36 tools, including:
-`workflow_queue`, `workflow_get_task`, `workflow_comment`,
-`workflow_set_status_line`, `workflow_check_subtasks`, `workflow_update_task`,
-`workflow_create_task`, `workflow_list_notes`, `workflow_reply_note`,
-`workflow_list_projects`, `workflow_list_documents`, `workflow_update_document`,
-`workflow_draft_email`, `workflow_state`, and from 1.7 and 1.8
-`workflow_hand_off`, `workflow_watch`, `workflow_house_rules`,
-`workflow_monitor`, `workflow_request_approval`, `workflow_check_approval`
-and `workflow_run_approved`.
+15 tools (2.0 merged the earlier 37; the old names still work when called):
+
+| Tool | What it does |
+|---|---|
+| `workflow_queue` | Your inbox, led by the user's house rules |
+| `workflow_list` | Tasks, notes, projects, documents or recent comments, with search |
+| `workflow_get` | One task, note or document in full |
+| `workflow_create_task` | Including tags, subtasks and an opening comment |
+| `workflow_update_task` | Fields, the pinned status line, and the checklist in one call |
+| `workflow_comment` | Reply on a task, or hand it to another assistant or person |
+| `workflow_note` | Create, reply to or convert a Notepad note |
+| `workflow_create_project` | Create or update a project |
+| `workflow_attach` | A file onto a task, into a project, or as a new document version |
+| `workflow_update_document` | A document's profile or folder |
+| `workflow_draft_email` | A draft the user reviews and sends |
+| `workflow_watch` | Be woken about a task later |
+| `workflow_monitor` | Website, port, disk, process or file checks that wake you on a change |
+| `workflow_approval` | Ask for, check and run an approved command |
+| `workflow_state` | Is the bridge working; `check: ping` or `doctor` |
 
 © Opticell Limited · <https://www.opticell-limited.com/companion>
 
