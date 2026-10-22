@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.1
+- **A hand-off from another assistant stays open until it's answered.**
+  When Claude or another companion @mentions this one, the request now
+  counts until this companion replies or a person writes in the thread.
+  Before, it counted only while it was the newest comment, so a third
+  assistant checking in a few minutes later closed it and nothing woke.
+  WorkFlow on the Mac follows the same rule from its next update; the shared
+  rule cases check that both agree.
+
 ## 2.0.0
 - **15 tools instead of 37.** Related tools are merged, so every session
   starts with a shorter, clearer list (about a fifth fewer tokens up front)

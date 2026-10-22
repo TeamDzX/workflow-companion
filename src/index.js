@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "2.0.0" };
+const SERVER_INFO = { name: "workflow", version: "2.0.1" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -644,8 +644,8 @@ function mentionsMe(text) {
   return new RegExp(`(^|[^A-Za-z0-9_])@${name}(?![A-Za-z0-9_])`, "i").test(text || "");
 }
 
-// A task counts as addressed to this agent when one of its last three
-// comments, written by a person, says @Name. Never in a shared project:
+// A task counts as addressed to this agent when addressingComment finds a
+// request in its thread. Never in a shared project:
 // a collaborator can write into those threads, so a mention there is not
 // the owner asking (the same rule as the Mac's wake trigger).
 function addressedToMe(t, sharedProjects) {
@@ -659,26 +659,33 @@ function addressedToMe(t, sharedProjects) {
 const MAX_AGENT_HOPS = 3;
 const isAgentID = id => String(id || "").startsWith("agent.");
 
-// The comment asking this agent for something, if any. A person's @Name
-// counts in any of the last three comments. Another assistant's counts only
-// as the newest comment, and only while the run of assistant comments with an
-// @mention since a person last wrote is within MAX_AGENT_HOPS. Before 1.6 an
-// assistant's comment never counted, so Claude's "@Jarvis, brief above" woke
-// nothing.
+// The comment asking this agent for something, if any: the newer of a
+// person's @Name in the last three comments and another assistant's @Name it
+// hasn't answered yet, within MAX_AGENT_HOPS. Before 1.6 an assistant's
+// comment never counted, so Claude's "@Jarvis, brief above" woke nothing.
+// Before 2.0.1 it counted only as the newest comment, so a check-in from a
+// third assistant minutes later closed it; now it stays open until this agent
+// replies or a person writes (the comms-test miss, Oct 2026).
 function addressingComment(t) {
   const comments = t.comments || [];
-  // The newest request wins: a fresh assistant hand-off must count even when
-  // an older @mention from a person is still among the last three.
-  const last = comments[comments.length - 1];
-  if (last && isAgentID(last.authorID) && last.authorID !== AGENT.authorID && mentionsMe(last.text)) {
+  let handoff = -1;
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const c = comments[i];
+    if (!isAgentID(c.authorID) || c.authorID === AGENT.authorID) break;
+    if (!mentionsMe(c.text)) continue;
     let hops = 0;
-    for (const c of [...comments].reverse()) {
-      if (!isAgentID(c.authorID)) break;
-      if (/(^|[^A-Za-z0-9_])@[A-Za-z]/.test(c.text || "")) hops++;
+    for (let j = i; j >= 0 && isAgentID(comments[j].authorID); j--) {
+      if (/(^|[^A-Za-z0-9_])@[A-Za-z]/.test(comments[j].text || "")) hops++;
     }
-    if (hops <= MAX_AGENT_HOPS) return last;
+    if (hops <= MAX_AGENT_HOPS) handoff = i;
+    break;
   }
-  return comments.slice(-3).reverse().find(c => !isAgentID(c.authorID) && mentionsMe(c.text)) || null;
+  let person = -1;
+  for (let i = comments.length - 1; i >= Math.max(0, comments.length - 3); i--) {
+    if (!isAgentID(comments[i].authorID) && mentionsMe(comments[i].text)) { person = i; break; }
+  }
+  const i = Math.max(handoff, person);
+  return i >= 0 ? comments[i] : null;
 }
 
 // On a task assigned to this agent: the newest comment from another

@@ -8,7 +8,12 @@
     { "name": "mentions ignore case", "agent": "Jarvis", "comments": [["person", "@jarvis please look"]], "trigger": 0 },
     { "name": "an email address isn't a mention", "agent": "Jarvis", "comments": [["person", "write to ops@jarvis.example"]], "trigger": null },
     { "name": "another assistant's @mention asks when it's the newest comment", "agent": "Jarvis", "comments": [["person", "sort the cert"], ["Claude", "@Jarvis please renew it on the server"]], "trigger": 1 },
-    { "name": "another assistant's @mention lapses once something follows it", "agent": "Jarvis", "comments": [["Claude", "@Jarvis please renew it"], ["Claude", "never mind, done"]], "trigger": null },
+    { "name": "another assistant's @mention stays open through later assistant comments", "agent": "Jarvis", "comments": [["Claude", "@Jarvis please renew it"], ["opticell", "checked in: waiting on Jarvis"], ["Claude", "still pending"]], "trigger": 0 },
+    { "name": "another assistant's @mention closes once it replies", "agent": "Jarvis", "comments": [["Claude", "@Jarvis please renew it"], ["self", "renewed"]], "trigger": null },
+    { "name": "another assistant's @mention closes once a person writes", "agent": "Jarvis", "comments": [["Claude", "@Jarvis please renew it"], ["person", "leave it, I did it"]], "trigger": null },
+    { "name": "an open hand-off wins over an older person's @mention", "agent": "Jarvis", "comments": [["person", "@Jarvis first ask"], ["Claude", "@Jarvis newer hand-off"], ["opticell", "fyi"]], "trigger": 1 },
+    { "name": "a person's newer @mention wins over an open hand-off", "agent": "Jarvis", "comments": [["Claude", "@Jarvis renew it"], ["person", "@Jarvis and the other one"], ["Claude", "fyi"]], "trigger": 1 },
+    { "name": "an open hand-off still obeys the hop limit", "agent": "Jarvis", "comments": [["person", "start"], ["self", "@Claude one"], ["Claude", "@Jarvis two"], ["self", "@Claude three"], ["Claude", "@Jarvis four"], ["opticell", "checked in"]], "trigger": null },
     { "name": "an assistant never asks itself", "agent": "Jarvis", "comments": [["self", "@Jarvis note to self"]], "trigger": null },
     { "name": "three hand-offs in a row are allowed", "agent": "Jarvis", "comments": [["person", "start"], ["Claude", "@Jarvis one"], ["self", "@Claude two"], ["Claude", "@Jarvis three"]], "trigger": 3 },
     { "name": "the fourth hand-off in a row is refused (no loops)", "agent": "Jarvis", "comments": [["person", "start"], ["self", "@Claude one"], ["Claude", "@Jarvis two"], ["self", "@Claude three"], ["Claude", "@Jarvis four"]], "trigger": null },
@@ -25,6 +30,7 @@
 
     { "name": "Claude: a person's @claude asks", "agent": "Claude", "comments": [["person", "@claude summarise this"]], "trigger": 0 },
     { "name": "Claude: a companion's @Claude hand-off asks", "agent": "Claude", "comments": [["person", "x"], ["Jarvis", "@Claude handing this over to you"]], "trigger": 1 },
+    { "name": "Claude: a companion's @Claude survives another companion's check-in (comms test)", "agent": "Claude", "comments": [["person", "run the test"], ["opticell", "@Jarvis step 1"], ["Jarvis", "@Claude step 2, reply to @opticell"], ["opticell", "checked in: Claude hasn't replied yet"]], "trigger": 2 },
     { "name": "Claude, assigned: a companion's FYI is not a request", "agent": "Claude", "assigned": true, "comments": [["person", "please draft it"], ["Jarvis", "fyi the server is back"]], "trigger": 0 },
     { "name": "Claude, assigned: a person's follow-up is a request", "agent": "Claude", "assigned": true, "comments": [["self", "drafted"], ["person", "shorter please"]], "trigger": 1 }
   ]
