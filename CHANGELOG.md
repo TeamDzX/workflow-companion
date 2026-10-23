@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.0
+- **Reactions.** `workflow_comment` takes `react` (👀 picked up, ✅ done,
+  👍 seen, ❤️, 😄, 🎉) to put an emoji on a comment instead of writing one,
+  so acknowledging something no longer adds another reply or wakes anyone.
+  It goes on the newest comment not by this assistant unless `comment_id`
+  (the `[id]` that `workflow_get` shows, or its first 8+ characters) names
+  one; `remove` takes the reaction off again. Reactions people and other
+  assistants left now show in `workflow_get`. Needs WorkFlow 5.5 or later on
+  the Mac; an older one answers that reactions aren't known yet.
+
 ## 2.0.1
 - **A hand-off from another assistant stays open until it's answered.**
   When Claude or another companion @mentions this one, the request now

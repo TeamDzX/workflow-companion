@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "2.0.1" };
+const SERVER_INFO = { name: "workflow", version: "2.1.0" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -619,7 +619,10 @@ function showTask(t) {
   }
   const comments = t.comments || [];
   lines.push("", `${comments.length} comment(s):`);
-  for (const c of comments) lines.push("", `  ${c.author} · ${local(c.timestamp)}`, `    ${(c.text || "").replace(/\n/g, "\n    ")}`);
+  for (const c of comments) {
+    lines.push("", `  ${c.author} · ${local(c.timestamp)}${c.id ? `  [${c.id.slice(0, 8).toLowerCase()}]` : ""}`, `    ${(c.text || "").replace(/\n/g, "\n    ")}`);
+    if (c.reactions && c.reactions.length) lines.push("    " + c.reactions.map(r => `${r.emoji} ${r.userName}`).join("  "));
+  }
   return lines.join("\n");
 }
 
@@ -863,6 +866,16 @@ const OPS = [
     description: "Post a comment on a task, authored as the agent. This is how you reply to the user — it reaches their phone as a notification.",
     inputSchema: { type: "object", properties: { task: { type: "string" }, text: { type: "string" }, mentions: { type: "array", items: { type: "string" } } }, required: ["task", "text"] },
     handler: async a => receiptText(await send("add_comment", { taskID: findTask(a.task).id, text: a.text, mentions: a.mentions })),
+  },
+  {
+    name: "workflow_react",
+    description: "React to a comment: 👀 picked up, ✅ done, 👍 seen. Never wakes anyone.",
+    inputSchema: { type: "object", properties: { task: { type: "string" }, emoji: { type: "string" }, comment: { type: "string" }, remove: { type: "boolean" } }, required: ["task", "emoji"] },
+    handler: async a => {
+      const r = await send("react", { taskID: findTask(a.task).id, emoji: a.emoji, commentID: a.comment, removeReaction: a.remove || undefined });
+      if (r.status === "rejected" && /Unknown op/.test(r.message || "")) return "[rejected] This WorkFlow doesn't know reactions yet: it needs WorkFlow 5.5 or later on the Mac.";
+      return receiptText(r);
+    },
   },
   {
     name: "workflow_set_status_line",
@@ -1318,12 +1331,16 @@ const TOOLS = [
   },
   {
     name: "workflow_comment",
-    description: "Post a comment on a task, as you. This is how you reply to the user: it reaches their phone. hand_to gives the task to another assistant (Claude, or a companion such as Jarvis) or a person instead: they become the assignee and your text goes with it; handing to an assistant starts its session. Use hand_to, not an @mention, when the work itself should move.",
-    inputSchema: { type: "object", properties: { task: { type: "string" }, text: { type: "string" }, mentions: { type: "array", items: { type: "string" } }, hand_to: { type: "string" } }, required: ["task"] },
-    handler: a => {
+    description: "Post a comment on a task, as you. This is how you reply to the user: it reaches their phone. hand_to gives the task to another assistant (Claude, or a companion such as Jarvis) or a person instead: they become the assignee and your text goes with it; handing to an assistant starts its session. Use hand_to, not an @mention, when the work itself should move. react puts an emoji on a comment instead of writing one: 👀 picked up, ✅ done, 👍 seen. Prefer it to a comment that only acknowledges. It never notifies or wakes anyone. It goes on the newest comment not by you unless comment_id (the [id] workflow_get shows) says which; remove takes yours off. A person's 👍 means seen, never a yes to a risky change: ask in words for that.",
+    inputSchema: { type: "object", properties: { task: { type: "string" }, text: { type: "string" }, mentions: { type: "array", items: { type: "string" } }, hand_to: { type: "string" },
+      react: { type: "string", enum: ["👀", "✅", "👍", "❤️", "😄", "🎉"] }, comment_id: { type: "string" }, remove: { type: "boolean" } }, required: ["task"] },
+    handler: async a => {
       if (a.hand_to) return op("workflow_hand_off", { task: a.task, to: a.hand_to, note: a.text });
-      need(a, "text");
-      return op("workflow_comment", a);
+      const out = [];
+      if (a.react) out.push(await op("workflow_react", { task: a.task, emoji: a.react, comment: a.comment_id, remove: a.remove }));
+      if (a.text) out.push(await op("workflow_comment", a));
+      if (!out.length) need(a, "text");
+      return out.join("\n");
     },
   },
   {

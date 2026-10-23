@@ -25,6 +25,8 @@ head -c 4096 /dev/urandom > "$W/report.pdf"
 node drive.js '[["workflow_list_tasks"],["workflow_comment",{"task":"quarterly","text":"hi"}],["workflow_attach_file",{"task":"T1","file":"'"$W"'/report.pdf"}]]' > "$W/s1.out"
 check "reads the snapshot" "grep -q '#1 ok  To Do' $W/s1.out"
 check "a comment round-trips" "grep -q '#2 ok  \[ok\] did add_comment' $W/s1.out"
+node drive.js '[["workflow_comment",{"task":"quarterly","react":"👀"}]]' > "$W/s1r.out"
+check "a reaction goes through workflow_comment as a react command" "grep -q '#1 ok  \[ok\] did react' $W/s1r.out && node -e \"const s=require(process.env.MOCK_STATE); const c=s.applied.find(c=>c.op=='react')||{}; process.exit(c.emoji=='👀'&&c.taskID?0:1)\""
 attached() { node -e "const s=require(process.env.MOCK_STATE); const c=s.applied.find(c=>c.op=='attach_file')||{}; console.log([c.uploadFound, c.uploadBytes, c.fileName, Object.keys(s.records).filter(k=>k.startsWith('upload-')).length].join(' '))"; }
 check "a file goes up through iCloud and the command names it" "grep -q '#3 ok  \\[ok\\] did attach_file' $W/s1.out && [ \"\$(attached | cut -d' ' -f1-3)\" = 'true 4096 report.pdf' ]"
 check "the upload is gone once the command is applied" "[ \"\$(attached | cut -d' ' -f4)\" = 0 ]"
