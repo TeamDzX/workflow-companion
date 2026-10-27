@@ -32,6 +32,11 @@
     { "name": "Claude: a companion's @Claude hand-off asks", "agent": "Claude", "comments": [["person", "x"], ["Jarvis", "@Claude handing this over to you"]], "trigger": 1 },
     { "name": "Claude: a companion's @Claude survives another companion's check-in (comms test)", "agent": "Claude", "comments": [["person", "run the test"], ["opticell", "@Jarvis step 1"], ["Jarvis", "@Claude step 2, reply to @opticell"], ["opticell", "checked in: Claude hasn't replied yet"]], "trigger": 2 },
     { "name": "Claude, assigned: a companion's FYI is not a request", "agent": "Claude", "assigned": true, "comments": [["person", "please draft it"], ["Jarvis", "fyi the server is back"]], "trigger": 0 },
-    { "name": "Claude, assigned: a person's follow-up is a request", "agent": "Claude", "assigned": true, "comments": [["self", "drafted"], ["person", "shorter please"]], "trigger": 1 }
+    { "name": "Claude, assigned: a person's follow-up is a request", "agent": "Claude", "assigned": true, "comments": [["self", "drafted"], ["person", "shorter please"]], "trigger": 1 },
+    { "name": "assigned: a bare Apply on a proposal is not a follow-up (5.6)", "agent": "Jarvis", "assigned": true, "comments": [["person", "tidy the backlog"], ["self", "📝 Proposal P7K2: Delete “old”"], ["person", "✓ Applied P7K2"]], "trigger": 0 },
+    { "name": "assigned: a bare Decline on a proposal is not a follow-up (5.6)", "agent": "Jarvis", "assigned": true, "comments": [["person", "tidy the backlog"], ["self", "📝 Proposal P7K2: Delete “old”"], ["person", "✗ Declined P7K2"]], "trigger": 0 },
+    { "name": "assigned: a Decline that names the assistant is a request (5.6)", "agent": "Jarvis", "assigned": true, "comments": [["person", "tidy the backlog"], ["self", "📝 Proposal P7K2: Delete “old”"], ["person", "✗ Declined P7K2 — @Jarvis: keep it until Friday"]], "trigger": 2 },
+    { "name": "unassigned: a Decline that names the assistant is a request (5.6)", "agent": "Jarvis", "comments": [["self", "📝 Proposal P7K2: Mark “X” done"], ["person", "✗ Declined P7K2 — @Jarvis: not finished"]], "trigger": 1 },
+    { "name": "Claude, assigned: a bare Apply on a proposal is not a follow-up (5.6)", "agent": "Claude", "assigned": true, "comments": [["person", "file the receipts"], ["self", "📝 Proposal Q4RT: Mark “Receipts” done"], ["person", "✓ Applied Q4RT"]], "trigger": 0 }
   ]
 }

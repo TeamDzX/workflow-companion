@@ -34,6 +34,9 @@ const snap = { generatedAt: new Date().toISOString(),
       pinnedNote: JSON.stringify([{ name: "Busy", seen: new Date(Date.now() - 86400000).toISOString(), host: "OTHER-PC" }]) },
   ],
   notes: [{ id: "N1", title: "Ideas", body: "@Server summarise the logs" }, { id: "N2", title: "Other", body: "@serverless is a word" }],
+  // 2.2 downloads: D2's "Mac" sends a checksum that doesn't match its bytes.
+  documents: [{ id: "D1", number: "WF-D1A2B3", name: "readings.csv", version: 1, task: "Quarterly report", versions: [] },
+    { id: "D2", number: "WF-D2C4D6", name: "broken.bin", version: 1, task: "Quarterly report", versions: [] }],
   projects: [{ name: "Ops", isShared: false }, { name: "Client", isShared: true }] };
 module.exports = { snap, locked };
 // A test can serve a different snapshot by writing it to MOCK_STATE.snap
@@ -56,6 +59,11 @@ function answer(url, opts) {
   }
   if (url.startsWith("https://registry.mock/")) {
     try { const b = fs.readFileSync(STATE + ".tgz"); return reply(200, b.buffer.slice(b.byteOffset, b.byteOffset + b.length)); } catch (_) { return reply(404, {}); }
+  }
+  // A file WorkFlow sends back (2.2): bytes kept base64 under its record name.
+  if (url.startsWith("https://files.mock/")) {
+    const b = Buffer.from((s.files || {})[url.slice("https://files.mock/".length).split("/")[0]] || "", "base64");
+    return reply(b.length ? 200 : 404, b.buffer.slice(b.byteOffset, b.byteOffset + b.length));
   }
   if (url.startsWith("https://assets.mock/")) { s.downloads++; save(s); return reply(200, snapOverride() || snap); }
   // Asset upload (1.6): the bytes go to the address handed out below.

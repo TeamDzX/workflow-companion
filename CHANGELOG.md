@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.2.0
+- **Proposals.** `workflow_propose` suggests a change instead of making it:
+  complete, delete, update, comment or create a task. The user sees exactly
+  what would change, with Apply and Decline, and nothing happens until they
+  tap Apply. Deleting a task is only possible this way. An Apply or a bare
+  Decline doesn't wake the assistant; a Decline with a reason @mentions it.
+  Depending on the user's Ask Before setting, a direct complete or change can
+  come back as a proposal by itself, and the reply says so.
+- **Morning brief.** When the user makes this companion their daily
+  assistant (WorkFlow → Settings → Agent Bridge → Briefs, Check-ins &
+  Approvals), `workflow_brief` gives the facts (overdue, due today, waiting
+  on their OK, what assistants did) and posts the brief. It becomes their
+  Today in WorkFlow notification and a card on My Day.
+- **Check-ins.** The scheduled `wake` job now also decides, without a model,
+  when a brief is due and whether a check-in has anything new: a task just
+  overdue, a close deadline with nothing done, a task stalled for 7 days, a
+  proposal waiting over a day, an email asking a question. With nothing to
+  say, no session starts. Quiet hours are respected. `workflow-companion
+  daily --dry-run` shows what it would do now. A companion that isn't the
+  daily assistant does nothing new.
+- **Files back.** `workflow_download` saves a document's or attachment's
+  file to this computer (default `Downloads/WorkFlow`), checks its SHA-256
+  and never overwrites an existing file. Needs WorkFlow 5.6.1 or later.
+- Proposals, the brief and check-ins need WorkFlow 5.6 or later on the Mac or
+  iPhone that answers; an older one answers that it doesn't know them yet.
+
 ## 2.1.0
 - **Reactions.** `workflow_comment` takes `react` (👀 picked up, ✅ done,
   👍 seen, ❤️, 😄, 🎉) to put an emoji on a comment instead of writing one,

@@ -255,6 +255,15 @@ approved commands it ran, and its last words.
   WorkFlow 5.3 or later on the answering Mac or iPhone attaches it and then
   deletes the uploaded copy. Up to 50 MB a file. An older WorkFlow ignores the
   upload and reports the file as missing.
+- **And back again (2.2).** `workflow_download` saves a document's file to
+  this computer (default: `Downloads/WorkFlow` in your home folder), checks its
+  SHA-256 and never overwrites a file already there. It needs WorkFlow 5.6.1 or
+  later on the Mac or iPhone that answers; the file waits in your iCloud only
+  until it's collected, and an hour at most.
+- **Daily assistant (2.2).** Pick this companion in WorkFlow → Settings →
+  Agent Bridge → Briefs, Check-ins & Approvals and the `wake` job writes a
+  morning brief and checks in every few hours outside quiet hours, starting a
+  session only when something new needs you. Needs WorkFlow 5.6.
 - **The token is a password.** `~/.workflow-companion/token.txt` opens your
   WorkFlow data in iCloud. Apple replaces it on every request, and the
   companion saves each replacement at once. Several Claude sessions on one
@@ -270,7 +279,7 @@ approved commands it ran, and its last words.
 
 ## Tools
 
-15 tools (2.0 merged the earlier 37; the old names still work when called):
+18 tools (2.0 merged the earlier 37; the old names still work when called):
 
 | Tool | What it does |
 |---|---|
@@ -289,6 +298,9 @@ approved commands it ran, and its last words.
 | `workflow_monitor` | Website, port, disk, process or file checks that wake you on a change |
 | `workflow_approval` | Ask for, check and run an approved command |
 | `workflow_state` | Is the bridge working; `check: ping` or `doctor` |
+| `workflow_propose` | Suggest a change for the user to Apply or Decline (WorkFlow 5.6) |
+| `workflow_brief` | The morning brief, for the daily assistant (WorkFlow 5.6) |
+| `workflow_download` | Save a document's file to this computer (WorkFlow 5.6.1) |
 
 © Opticell Limited · <https://www.opticell-limited.com/companion>
 

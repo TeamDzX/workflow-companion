@@ -25,6 +25,18 @@ setInterval(() => locked(() => {
       fs.writeFileSync(STATE + ".snap", JSON.stringify(snap));
       if (s.records.snapshot) s.records.snapshot.fields.sha.value = "mac-" + cmd.id;
     }
+    // get_attachment (WorkFlow 5.6.1): the file goes back as a "download-…"
+    // record the receipt names, as CloudBridge.publishDownload does.
+    if (cmd.op === "get_attachment") {
+      const bytes = Buffer.from(cmd.documentID === "D1" ? "date,temp\n2026-10-27,14.5\n" : "some bytes");
+      const rec = "download-" + name;
+      s.files = s.files || {}; s.files[rec] = bytes.toString("base64");
+      s.records[rec] = { recordName: rec, recordType: "BridgeSnapshot", fields: { snapshot: { value: { downloadURL: `https://files.mock/${rec}/\${f}` } } } };
+      const sha = require("crypto").createHash("sha256").update(cmd.documentID === "D1" ? bytes : Buffer.from("other")).digest("hex");
+      s.records["receipt-" + name] = { recordName: "receipt-" + name, recordType: "BridgeReceipt", fields: { payload: { value: JSON.stringify({ id: cmd.id, op: cmd.op, status: "applied", message: "WF-x v1", download: rec, fileName: cmd.documentID === "D1" ? "readings.csv" : "broken.bin", bytes: bytes.length, sha256: sha }) } } };
+      delete s.records[name];
+      continue;
+    }
     s.records["receipt-" + name] = { recordName: "receipt-" + name, recordType: "BridgeReceipt", fields: { payload: { value: JSON.stringify({ id: cmd.id, op: cmd.op, status: "applied", message: "did " + cmd.op, taskID: cmd.taskID || (cmd.op === "create_task" ? "NEW-" + cmd.id.slice(-6) : undefined) }) } } };
     delete s.records[name];
   }

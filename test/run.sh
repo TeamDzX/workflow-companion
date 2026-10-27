@@ -14,6 +14,8 @@ export WF_NO_SCHEDULE=1
 # Nor show real notifications: they're written here instead.
 export WF_NOTIFY_LOG="$W/notify.log"
 mkdir -p "$HOME"; cd "$HERE"; node init.js
+# 2.2: the daily assistant's brief and check-in decisions, offline.
+node daily.js | sed 's/^/  /' || fail=1
 fail=0; check() { if eval "$2"; then echo "pass  $1"; else echo "FAIL  $1"; fail=1; fi; }
 st() { node -e "const s=require(process.env.MOCK_STATE); console.log($1)"; }
 
@@ -27,6 +29,8 @@ check "reads the snapshot" "grep -q '#1 ok  To Do' $W/s1.out"
 check "a comment round-trips" "grep -q '#2 ok  \[ok\] did add_comment' $W/s1.out"
 node drive.js '[["workflow_comment",{"task":"quarterly","react":"👀"}]]' > "$W/s1r.out"
 check "a reaction goes through workflow_comment as a react command" "grep -q '#1 ok  \[ok\] did react' $W/s1r.out && node -e \"const s=require(process.env.MOCK_STATE); const c=s.applied.find(c=>c.op=='react')||{}; process.exit(c.emoji=='👀'&&c.taskID?0:1)\""
+node drive.js '[["workflow_propose",{"task":"quarterly","action":"update","due":"2026-11-07","summary":"Move it to next week"}],["workflow_propose",{"task":"quarterly","action":"delete"}]]' > "$W/sp.out"
+check "a proposal goes as a propose command carrying the change (5.6)" "grep -q '#1 ok  \[ok\] did propose' $W/sp.out && node -e \"const s=require(process.env.MOCK_STATE); const ps=s.applied.filter(c=>c.op=='propose'); const [u,d]=ps; process.exit(ps.length==2&&u.text=='Move it to next week'&&u.proposal.op=='update_task'&&u.proposal.dueDate=='2026-11-07'&&u.proposal.taskID==u.taskID&&d.proposal.op=='delete_task'?0:1)\""
 attached() { node -e "const s=require(process.env.MOCK_STATE); const c=s.applied.find(c=>c.op=='attach_file')||{}; console.log([c.uploadFound, c.uploadBytes, c.fileName, Object.keys(s.records).filter(k=>k.startsWith('upload-')).length].join(' '))"; }
 check "a file goes up through iCloud and the command names it" "grep -q '#3 ok  \\[ok\\] did attach_file' $W/s1.out && [ \"\$(attached | cut -d' ' -f1-3)\" = 'true 4096 report.pdf' ]"
 check "the upload is gone once the command is applied" "[ \"\$(attached | cut -d' ' -f4)\" = 0 ]"
@@ -397,7 +401,7 @@ node -e "const f=process.env.MOCK_STATE,s=require(f);s.expired=false;require('fs
 
 # 2.0: the merged tools. Old names still answer; only the 15 are listed.
 listed() { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | node -r ./mock.js "$SERVER" --cloud 2>/dev/null | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const t=JSON.parse(d.trim().split('\n').pop()).result.tools;console.log(t.length, t.map(x=>x.name).join(' '))})"; }
-check "fifteen tools are listed, none of the old ones" "[ \"\$(listed | cut -d' ' -f1)\" = 15 ] && ! listed | grep -qw workflow_set_status_line && listed | grep -qw workflow_list"
+check "eighteen tools are listed (2.2 adds workflow_propose, workflow_brief and workflow_download), none of the old ones" "[ \"\$(listed | cut -d' ' -f1)\" = 18 ] && ! listed | grep -qw workflow_set_status_line && listed | grep -qw workflow_list && listed | grep -qw workflow_download"
 node mac.js & MAC=$!
 n0=$(st 's.applied.length')
 node drive.js '[["workflow_list",{"query":"backup"}],["workflow_list",{"kind":"notes"}],["workflow_get",{"id":"quarterly"}],["workflow_get",{"id":"N1"}],["workflow_get",{"id":"nothing like it"}],
@@ -421,5 +425,15 @@ check "attach wants exactly one target, and attaches to a task" "grep -q '#11 ER
 check "approval check needs a code" "grep -q '#13 ERR Give code.' $W/m1.out"
 check "state check ping round-trips" "grep -q '#14 ok  \[ok\] did ping' $W/m1.out"
 check "an old tool name still works" "grep -q '#15 ok  \[ok\] did update_task' $W/m1.out && new_ops | grep -q '\"pinnedNote\":\"old name\"'"
+
+# 2.2 / WorkFlow 5.6.1: a file comes back from WorkFlow through iCloud.
+node mac.js & MAC=$!
+mkdir -p "$W/dl"
+node drive.js '[["workflow_download",{"document":"WF-D1A2B3","save_to":"'"$W"'/dl"}],["workflow_download",{"document":"readings.csv","save_to":"'"$W"'/dl"}],["workflow_download",{"document":"broken.bin","save_to":"'"$W"'/dl"}]]' > "$W/dl.out"
+kill $MAC
+check "a download arrives, checked, under its own name" "grep -q '#1 ok  Saved WF-D1A2B3 “readings.csv” (26 bytes, SHA-256 checked)' $W/dl.out && [ \"\$(cat $W/dl/readings.csv)\" = \"\$(printf 'date,temp\n2026-10-27,14.5')\" ]"
+check "a second download never overwrites the first" "[ -f '$W/dl/readings (2).csv' ]"
+check "a damaged download is refused and not saved" "grep -q '#3 ERR The file arrived damaged' $W/dl.out && [ ! -f $W/dl/broken.bin ]"
+check "downloads are deleted from iCloud once collected" "[ \"\$(st 'Object.keys(s.records).filter(k=>k.startsWith(\"download-\")).length')\" = 0 ]"
 
 exit $fail
