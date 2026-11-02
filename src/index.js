@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "2.2.0" };
+const SERVER_INFO = { name: "workflow", version: "2.3.0" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -40,11 +40,28 @@ function containerRoot() {
   return path.join(os.homedir(), "Library/Containers/mac.TeamDZX.worflow/Data/Library/Application Support/AgentBridge");
 }
 
+// macOS 15 asks before one app reads another's container, and asks again when
+// the asking program's path changes, which is every Claude Code update. So the
+// chosen folder is remembered outside it (shared with `wf`), and the container
+// is read at most once. Off the Mac there's no container to look in.
 function bridgeRoot() {
   if (process.env.WF_BRIDGE) return process.env.WF_BRIDGE;
+  const isBridge = r => !!r && !r.startsWith(containerRoot()) && fs.existsSync(path.join(r, "state.json"));
+  const remembered = path.join(os.homedir(), ".workflow-companion", "bridge-root.json");
   try {
-    const pointer = JSON.parse(fs.readFileSync(path.join(containerRoot(), "location.json"), "utf8"));
-    if (pointer.root && fs.existsSync(pointer.root)) return pointer.root;
+    const root = JSON.parse(fs.readFileSync(remembered, "utf8")).root;
+    if (isBridge(root)) return root;
+  } catch (_) { /* nothing remembered yet */ }
+  if (process.platform !== "darwin") return containerRoot();
+  try {
+    const root = JSON.parse(fs.readFileSync(path.join(containerRoot(), "location.json"), "utf8")).root;
+    if (isBridge(root)) {
+      try {
+        fs.mkdirSync(path.dirname(remembered), { recursive: true });
+        fs.writeFileSync(remembered, JSON.stringify({ root }) + "\n");
+      } catch (_) { /* only costs a lookup next time */ }
+      return root;
+    }
   } catch (_) { /* no pointer: the bridge is still inside the container */ }
   return containerRoot();
 }
@@ -157,8 +174,14 @@ const CLOUD = argv.includes("--cloud") || process.env.WF_MODE === "cloud" ||
 const DEFAULT_COMPANION_NAME = "Companion";
 function agentFor(name) {
   const clean = String(name || "").trim().replace(/^@/, "") || DEFAULT_COMPANION_NAME;
-  return { name: clean, authorID: "agent." + clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") };
+  // WorkFlow's rule (AgentIdentity.actor): "agent." + the name lower-cased.
+  // Before 2.3 "_" became "-" here, so My_Bot had two identities (handover
+  // gap #3). validAgentName already limits names to letters, digits, _ and -.
+  return { name: clean, authorID: "agent." + clean.toLowerCase() };
 }
+// Presence record names keep the old dashed form, which CloudBridge.swift's
+// slug(_:) matches: changing it would orphan every existing check-in record.
+const recordSlug = name => String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 // Names must survive as an @mention and a CloudKit-safe id.
 function validAgentName(name) { return /^[A-Za-z][A-Za-z0-9_-]{0,23}$/.test(String(name || "").trim()) && !/^claude$/i.test(String(name).trim()); }
 // Claude Desktop sets the name in the extension's settings (WF_AGENT_NAME);
@@ -730,6 +753,16 @@ function assignedHandoff(t) {
     return hops <= MAX_AGENT_HOPS ? c : null;
   }
   return null;
+}
+
+// Mentions in the run of assistant comments at the end of a thread, since a
+// person last wrote. A hand_to posts one, so it counts here too.
+function trailingAgentHops(comments) {
+  let hops = 0;
+  for (let j = comments.length - 1; j >= 0 && isAgentID(comments[j].authorID); j--) {
+    if (/(^|[^A-Za-z0-9_])@[A-Za-z]/.test(comments[j].text || "")) hops++;
+  }
+  return hops;
 }
 
 // This agent's watch on a task (1.7, WorkFlow 5.4): when it asked to be
@@ -1859,6 +1892,12 @@ function wakeItems(snap) {
       : mine(t) ? `assigned to ${AGENT.name}` : `@${AGENT.name} in a comment`;
     // Here only because of a watch that isn't due yet: nothing to do now.
     if (!trigger && w && !w.due && !mine(t)) return null;
+    // 2.3: assigned here by another assistant past the hop limit, with no
+    // person in between. Before, every hand_to woke the new assignee as fresh
+    // work, so two assistants could pass a task back and forth forever
+    // (handover gap #1).
+    // Its seen key is then forgotten, so a person writing again wakes it.
+    if (mine(t) && !(trigger && trigger.watch) && trailingAgentHops(t.comments || []) > MAX_AGENT_HOPS) return null;
     return { key: `task:${t.id}`, sig: trigger ? `${trigger.id || ""}@${trigger.timestamp || ""}` : "assigned",
       kind: "task", id: t.id, title: t.title, project: t.project || "", why };
   }).filter(Boolean);
@@ -2092,7 +2131,7 @@ function dailyStatePath() { return CLOUD ? path.join(COMPANION.home, "daily-stat
 
 function assistantConfig(snap) {
   return Object.assign({ askBefore: "finishing", dailyAssistant: null, briefHour: 8, briefMinute: 0, checkEveryHours: 0,
-    quietFrom: 21, quietUntil: 7, replyDrafts: "onRequest" }, (snap && snap.assistant) || {});
+    quietFrom: 21, quietUntil: 7, replyDrafts: "onRequest", weeklyReview: "off" }, (snap && snap.assistant) || {});
 }
 
 function isDailyAssistant(snap) {
@@ -2163,6 +2202,44 @@ function briefFacts(snap, now = new Date()) {
   return facts;
 }
 
+// The weekly review's facts (2.3, WorkFlow 5.7): the week behind and the
+// week ahead, all from the snapshot.
+function reviewFacts(snap, now = new Date()) {
+  const today = startOfDay(now), weekAgo = new Date(+today - 7 * 864e5), weekAhead = new Date(+today + 8 * 864e5);
+  const row = t => ({ id: t.id, title: t.title, project: t.project || "", due: t.hasDueDate ? t.dueDate : null, priority: t.priority || "" });
+  const tasks = (snap.tasks || []).filter(t => !t.isHidden);
+  const open = tasks.filter(t => t.status !== "Completed" && !(t.snoozedUntil && Date.parse(t.snoozedUntil) > +now));
+  const done = tasks.filter(t => t.status === "Completed" && t.completedDate && Date.parse(t.completedDate) >= +weekAgo).map(row);
+  const slipped = open.filter(t => t.hasDueDate && Date.parse(t.dueDate) >= +weekAgo && Date.parse(t.dueDate) < +today).map(row);
+  const lastTouch = t => Math.max(Date.parse(t.updatedAt) || 0, ...(t.comments || []).map(c => Date.parse(c.timestamp) || 0));
+  const stalled = open.filter(t => t.status === "In Progress" && +now - lastTouch(t) > DAILY.stalledDays * 864e5).map(row);
+  const nextWeek = open.filter(t => t.hasDueDate && Date.parse(t.dueDate) >= +today && Date.parse(t.dueDate) < +weekAhead)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate)).map(row);
+  const needsYou = pendingForPerson(snap, now);
+  const facts = { now: now.toISOString(), weekFrom: weekAgo.toISOString(), done: done.slice(0, 25), doneCount: done.length,
+    slipped: slipped.slice(0, 15), slippedCount: slipped.length, stalled: stalled.slice(0, 10), needsYou,
+    nextWeek: nextWeek.slice(0, 20), nextWeekCount: nextWeek.length };
+  facts.empty = !done.length && !slipped.length && !stalled.length && !needsYou.length && !nextWeek.length;
+  return facts;
+}
+
+// Monday of the week `d` is in, as a key: one review a week.
+const weekKey = d => dayKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)));
+
+// Friday from 16:00, or Monday from the brief's time, for four hours.
+function reviewWindow(cfg, now) {
+  const day = now.getDay();
+  if (cfg.weeklyReview === "friday" && day === 5) {
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 16);
+    return +now >= +from && +now < +from + 4 * 36e5;
+  }
+  if (cfg.weeklyReview === "monday" && day === 1) {
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), cfg.briefHour, cfg.briefMinute);
+    return +now >= +from && +now < +from + 4 * 36e5;
+  }
+  return false;
+}
+
 // Words that mean an email wants something back. Deliberately plain: this
 // only decides whether a check-in looks at it; the session decides.
 const WANTS_REPLY = /\?|\b(please|could you|can you|would you|let me know|let us know|get back to|reply|respond|confirm|are you able|do you have)\b/i;
@@ -2214,6 +2291,15 @@ function dailyStep(snap, now = new Date(), opts = {}) {
     return facts.empty ? { kind: "brief", skipped: "nothing to say" } : { kind: "brief", facts };
   }
 
+  // 2.3: the weekly review. After the brief (which returns above when it's
+  // due), so a Monday review lands on a later tick, never alongside it.
+  if (reviewWindow(cfg, now) && st.reviewWeek !== weekKey(now)) {
+    st.reviewWeek = weekKey(now);
+    const facts = reviewFacts(snap, now);
+    save();
+    return facts.empty ? { kind: "review", skipped: "nothing to say" } : { kind: "review", facts };
+  }
+
   // A check-in just before the brief would say the same things twice.
   const briefSoon = +now < briefAt && briefAt - now < 36e5 && st.briefDay !== dayKey(now) && !briefToday;
   const every = Number(cfg.checkEveryHours) || 0;
@@ -2246,6 +2332,25 @@ This session only writes the brief: don't change, complete or comment on anythin
 ${DATA_WARNING}`;
 }
 
+function reviewPrompt(facts, rules = "") {
+  const monday = new Date(Date.parse(facts.now));
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const title = `Week of ${monday.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`;
+  return `You are "${AGENT.name}", the user's daily assistant in WorkFlow. Write their weekly review: a look back at the week and a plan for the next.
+
+The facts, computed from their library just now (complete; don't go looking for more unless a line needs checking):
+${JSON.stringify(facts, null, 1)}
+${rules ? `\nTheir HOUSE RULES:\n${rules}\n` : ""}
+1. Create ONE note with workflow_note action create, titled "${title}". Short sections, plain words, no task ids:
+   Done (the few that mattered, and how many in all), Slipped, Stalled, Waiting on you, Next week (what's due and what to watch).
+   Keep it to what someone reads in a minute.
+2. Then suggest next week's plan as proposals with workflow_propose, at most 5: a realistic new date for something that slipped, a higher priority for something due soon with nothing done, closing something stalled that looks finished. Each needs the user's Apply; skip any that isn't clearly worth their tap.
+
+Don't change, complete or comment on anything directly. If nothing deserves a review after all, write nothing.
+
+${DATA_WARNING}`;
+}
+
 function checkPrompt(triggers, rules = "") {
   const list = triggers.map(t => `  [${t.kind}] ${t.title}${t.project ? ` (project ${t.project})` : ""}: id ${t.taskID}, ${t.why}`).join("\n");
   return `You are "${AGENT.name}", the user's daily assistant in WorkFlow, on a check-in. These are new since your last look:
@@ -2268,9 +2373,11 @@ async function runDaily(cfg) {
   const step = dailyStep(cloudSnap);
   if (!step) return;
   if (step.skipped) { logWake(`daily ${step.kind}: ${step.skipped}, no session`); return; }
-  const prompt = step.kind === "brief" ? briefPrompt(step.facts, houseRules(cloudSnap)) : checkPrompt(step.triggers, houseRules(cloudSnap));
+  const rules = houseRules(cloudSnap);
+  const prompt = step.kind === "brief" ? briefPrompt(step.facts, rules)
+    : step.kind === "review" ? reviewPrompt(step.facts, rules) : checkPrompt(step.triggers, rules);
   logWake(`daily ${step.kind}: starting a session${step.triggers ? ` (${step.triggers.length} new)` : ""}`);
-  await reportActivity("working", { task: step.kind === "brief" ? "Morning brief" : "Check-in" }).catch(() => {});
+  await reportActivity("working", { task: { brief: "Morning brief", review: "Weekly review" }[step.kind] || "Check-in" }).catch(() => {});
   const r = await runSession(cfg, prompt);
   logWake(`daily ${step.kind}: session exited ${r.code}${r.timedOut ? " (time limit)" : ""}`);
   await reportActivity(r.code === 0 && !r.timedOut ? "idle" : "attention",
@@ -3164,7 +3271,7 @@ async function reportPresence(force = false) {
   const cfg = readJSON(CP.config, null);
   if (!cfg || !fs.existsSync(CP.token)) return;
   if (!force && cfg.presenceAt && Date.now() - cfg.presenceAt < PRESENCE_EVERY_MS) return;
-  const slug = AGENT.authorID.slice("agent.".length);
+  const slug = recordSlug(AGENT.name);
   const fields = {
     aliveAt: { value: Date.now(), type: "TIMESTAMP" },
     appVersion: { value: SERVER_INFO.version, type: "STRING" },
@@ -3210,7 +3317,7 @@ async function reportActivity(kind, extra = {}) {
 async function companionPresence() {
   const names = companionRoster().map(e => e.name);
   if (!names.includes(AGENT.name)) names.push(AGENT.name);
-  const slugs = names.map(n => agentFor(n).authorID.slice("agent.".length));
+  const slugs = names.map(recordSlug);
   const got = await cloud.lookup(slugs.map(s => `companion-${s}`));
   return names.map((name, i) => {
     const r = got[`companion-${slugs[i]}`];
@@ -3300,8 +3407,8 @@ Install in one line: see https://github.com/TeamDzX/workflow-companion#install
 
 // Loaded by the shared rule tests (Tools/agent-rules) rather than run.
 if (require.main !== module) {
-  module.exports = { wakeItems, queueItems, addressingComment, assignedHandoff, agent: () => AGENT,
-    briefFacts, checkTriggers, dailyStep, pendingForPerson, inQuietHours };
+  module.exports = { wakeItems, queueItems, addressingComment, assignedHandoff, agent: () => AGENT, agentFor,
+    briefFacts, checkTriggers, dailyStep, pendingForPerson, inQuietHours, reviewFacts, reviewPrompt };
 } else {
   if (argv.includes("--print-config")) printConfig();
   else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);

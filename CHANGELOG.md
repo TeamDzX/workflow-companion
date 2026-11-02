@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.3.0
+- **Weekly review.** When the user turns it on (WorkFlow → Settings → Agent
+  Bridge → Briefs, Check-ins & Approvals → Weekly Review), the daily
+  assistant writes a weekly review on Friday afternoon or Monday morning:
+  one note looking back at the week (done, slipped, stalled, waiting on
+  them, next week), and next week's plan as proposals for them to Apply.
+  It's decided without a model, like the brief: with nothing to review, no
+  session starts. Needs WorkFlow 5.7 or later.
+- **Hand-offs can't loop.** Reassigning a task to another assistant with
+  `hand_to` now counts towards the same limit as an @mention: after three
+  hand-offs in a row with no person writing, the next assistant isn't woken.
+  A person writing again resets it.
+- **One identity per name.** A companion name with an underscore (`My_Bot`)
+  now gets the same id as WorkFlow gives it. Before, the two sides disagreed,
+  so such a companion could take its own comments for someone else's.
+- **Settings for each assistant.** WorkFlow 5.7 lets the user choose what
+  each assistant may do and in which projects. A command outside that comes
+  back refused, saying what's allowed and where to change it.
+- **Fewer macOS permission prompts.** On a Mac using a chosen bridge folder,
+  the companion now remembers that folder, so it reads WorkFlow's private
+  storage once at most. macOS asks permission for that read, and asks again
+  after each update of the program making it. Moved the folder before WorkFlow
+  5.7.2? Delete `~/.workflow-companion/bridge-root.json` so it looks again.
+- The test suite now runs the daily and wake cases in CI too.
+
 ## 2.2.0
 - **Proposals.** `workflow_propose` suggests a change instead of making it:
   complete, delete, update, comment or create a task. The user sees exactly

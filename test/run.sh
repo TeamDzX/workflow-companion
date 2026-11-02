@@ -14,9 +14,13 @@ export WF_NO_SCHEDULE=1
 # Nor show real notifications: they're written here instead.
 export WF_NOTIFY_LOG="$W/notify.log"
 mkdir -p "$HOME"; cd "$HERE"; node init.js
-# 2.2: the daily assistant's brief and check-in decisions, offline.
+fail=0
+# 2.2: the daily assistant's brief and check-in decisions, offline. Before
+# 2.3 this ran ahead of fail=0, so a failure here never failed the suite.
 node daily.js | sed 's/^/  /' || fail=1
-fail=0; check() { if eval "$2"; then echo "pass  $1"; else echo "FAIL  $1"; fail=1; fi; }
+# 2.3: the hop limit on hand-offs, and the agent id.
+node wake.js | sed 's/^/  /' || fail=1
+check() { if eval "$2"; then echo "pass  $1"; else echo "FAIL  $1"; fail=1; fi; }
 st() { node -e "const s=require(process.env.MOCK_STATE); console.log($1)"; }
 
 node -r ./mock.js "$SERVER" setup --api-token A --web-token tok0 > "$W/setup.out"
