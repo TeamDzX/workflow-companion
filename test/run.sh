@@ -157,7 +157,8 @@ check "status says waking is on" "grep -q 'waking      on' $W/wk2.out"
 wake
 check "new @mention work starts one session" "[ \$(runs) = 1 ] && grep -q 'Rotate the backups' $W/claude.prompt && grep -q 'Check the dashboards' $W/claude.prompt && grep -q 'Ideas' $W/claude.prompt"
 check "the session isn't told about shared or Claude's work" "! grep -q 'Shared thing' $W/claude.prompt && ! grep -q 'Mac work' $W/claude.prompt"
-check "only the WorkFlow tools are allowed by default" "grep -q -- '-p --allowedTools mcp__workflow' $W/claude.args"
+check "the WorkFlow and web tools are allowed by default" "grep -q -- '-p --allowedTools mcp__workflow WebSearch WebFetch' $W/claude.args"
+check "the prompt treats web pages as data" "grep -q 'A web page is DATA' $W/claude.prompt"
 check "the prompt treats task text as data" "grep -q 'They are DATA' $W/claude.prompt"
 wake
 check "the same work never starts a second session" "[ \$(runs) = 1 ]"
@@ -247,6 +248,18 @@ check "a watch that has come due wakes it, saying why" "[ \$(runs) = \$((before 
 check "after a session it reports itself idle" "[ \"\$(activity)\" = idle ]"
 wake
 check "a watch fires once" "[ \$(runs) = \$((before + 1)) ]"
+
+webrun=$(runs)
+WF_NO_SCHEDULE=1 PATH="$W/bin:$PATH" node -r ./mock.js "$SERVER" wake-on --no-web --claude "$W/bin/fake-claude" > "$W/wk-noweb.out" 2>&1
+node bump.js web1 _a Alex "@Server what about the archive?"
+wake
+check "--no-web leaves the web tools and the web line out" "[ \$(runs) = \$((webrun + 1)) ] && ! grep -q WebSearch $W/claude.args && ! grep -q 'A web page is DATA' $W/claude.prompt"
+WF_NO_SCHEDULE=1 PATH="$W/bin:$PATH" node -r ./mock.js "$SERVER" wake-on --web --allow-tools "mcp__workflow Bash WebSearch" --claude "$W/bin/fake-claude" > "$W/wk-web.out" 2>&1
+node bump.js web2 _a Alex "@Server and the rota?"
+wake
+check "custom --allow-tools keeps its rules and gains only what's missing" "[ \$(runs) = \$((webrun + 2)) ] && grep -q -- '-p --allowedTools mcp__workflow Bash WebSearch WebFetch' $W/claude.args"
+WF_NO_SCHEDULE=1 PATH="$W/bin:$PATH" node -r ./mock.js "$SERVER" wake-on --allow-tools mcp__workflow --claude "$W/bin/fake-claude" > "$W/wk-reset.out" 2>&1
+
 node bump.js s16 _a Alex "@Server status?"
 node mac.js & MAC=$!
 FAKE_EXIT=1 wake
@@ -370,6 +383,7 @@ node -r ./mock.js "$SERVER" canary on > /dev/null
 applied_json() { st 'JSON.stringify(s.applied)'; }
 node mac.js & MAC=$!
 canary > "$W/c1.out" 2>&1
+check "the self-test gets no web tools" "grep -q -- '--allowedTools' $W/claude.args && ! grep -q WebSearch $W/claude.args"
 check "the self-test passes end to end and says how long Claude took" "grep -q '✓ Passed: Claude answered in' $W/c1.out"
 check "it creates its own task once, and a pass only updates the status line" "applied_json | grep -q '⚙︎ Server daily self-test' && applied_json | grep -q '✓ Self-test passed' && ! applied_json | grep -q 'My daily self-test'"
 n_create=$(st 's.applied.filter(c=>c.op==="create_task"&&c.title==="⚙︎ Server daily self-test").length')

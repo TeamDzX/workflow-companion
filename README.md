@@ -144,8 +144,11 @@ npx -y @opticell/workflow-companion wake-on
   usage limit) is retried twice more, then says so in the thread.
 - **A time limit**, 45 minutes by default (`--max-minutes`). A session stopped
   by it says so in the thread.
-- **What it may do.** By default only the WorkFlow tools (`mcp__workflow`):
-  reading tasks and replying. To let it run commands on this computer, pass
+- **What it may do.** By default the WorkFlow tools (`mcp__workflow`), for
+  reading tasks and replying, plus `WebSearch` and `WebFetch`, so it can
+  research what you ask. Web pages it reads could try to mislead it, and a URL
+  it fetches can carry text out; `--no-web` turns web access off, `--web` back
+  on. Scheduled briefs, check-ins and the self-test never get it. To let it run commands on this computer, pass
   `--allow-tools "mcp__workflow Bash Read"` (any Claude Code permission rules).
   Anyone who can write `@Server` in your WorkFlow could then run commands
   here, so decide that deliberately. Shared projects never reach it.

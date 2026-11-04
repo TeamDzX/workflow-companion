@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.0
+- **Web research in woken sessions.** A session started by an @mention or an
+  assigned task can now use `WebSearch` and `WebFetch` without asking, on top
+  of any `--allow-tools` rules you set. It's told to treat web pages as data
+  and to keep private WorkFlow content out of URLs and search queries.
+  `workflow-companion wake-on --no-web` turns this off; `--web` turns it back
+  on. Scheduled briefs, check-ins and the self-test don't get web access.
+
 ## 2.3.0
 - **Weekly review.** When the user turns it on (WorkFlow → Settings → Agent
   Bridge → Briefs, Check-ins & Approvals → Weekly Review), the daily
