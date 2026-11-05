@@ -430,6 +430,7 @@ node drive.js '[["workflow_list",{"query":"backup"}],["workflow_list",{"kind":"n
   ["workflow_approval",{"action":"check"}],["workflow_state",{"check":"ping"}],["workflow_set_status_line",{"task":"T1","text":"old name"}]]' > "$W/m1.out"
 kill $MAC
 new_ops() { node -e "const s=require(process.env.MOCK_STATE);console.log(JSON.stringify(s.applied.slice($n0)))"; }
+check "reading a note lists its files, tags, links and snooze" "grep -q 'WF-D3E5F7  scan.jpg' $W/m1.out && grep -q 'tags: Suppliers' $W/m1.out && grep -q 'linked task: Quarterly report' $W/m1.out && grep -q 'snoozed until' $W/m1.out"
 check "list searches tasks" "grep -A1 '^#1 ok' $W/m1.out | grep -q 'Rotate the backups' && ! sed -n '/^#1/,/^#2/p' $W/m1.out | grep -q 'Quarterly'"
 check "list kind notes is the Notepad" "sed -n '/^#2/,/^#3/p' $W/m1.out | grep -q 'Ideas'"
 check "get finds a task by title and a note by id" "sed -n '/^#3/,/^#4/p' $W/m1.out | grep -q 'comment(s):' && sed -n '/^#4/,/^#5/p' $W/m1.out | grep -q 'id N1'"

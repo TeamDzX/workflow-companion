@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "2.4.0" };
+const SERVER_INFO = { name: "workflow", version: "2.5.0" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -810,7 +810,13 @@ function showNote(n) {
   if (n.isPinned) lines.push("pinned");
   if (n.isArchived) lines.push("archived");
   if (n.convertedTargetName) lines.push(`converted → ${n.convertedTargetName}`);
+  if ((n.tags || []).length) lines.push(`tags: ${n.tags.join(", ")}`);
+  if (n.snoozedUntil) lines.push(`snoozed until ${local(n.snoozedUntil)}`);
+  for (const l of n.links || []) lines.push(`linked ${l.kind}: ${l.name}  id ${l.id}`);
   lines.push(`updated: ${local(n.updatedAt)}`, "", n.body || "");
+  const id = String(n.id).toLowerCase();
+  const files = (snapshot().documents || []).filter(d => String(d.noteID || "").toLowerCase() === id);
+  if (files.length) lines.push("", "attachments (fetch with workflow_download):", ...files.map(d => `  ${d.number}  ${d.name}`));
   return lines.join("\n");
 }
 

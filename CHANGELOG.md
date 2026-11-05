@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5.0
+- **Notes show what's attached to them.** Reading a note now lists its files by
+  WF-number, so an assistant can fetch one with `workflow_download`, as well as
+  the note's tags, what it's linked to and whether it's snoozed. Tags, links and
+  snoozing need WorkFlow 5.7.3 or later.
+
 ## 2.4.0
 - **Web research in woken sessions.** A session started by an @mention or an
   assigned task can now use `WebSearch` and `WebFetch` without asking, on top

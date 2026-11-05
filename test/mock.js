@@ -33,10 +33,11 @@ const snap = { generatedAt: new Date().toISOString(),
       // and silently stopped this computer counting as a clash (13 Oct).
       pinnedNote: JSON.stringify([{ name: "Busy", seen: new Date(Date.now() - 86400000).toISOString(), host: "OTHER-PC" }]) },
   ],
-  notes: [{ id: "N1", title: "Ideas", body: "@Server summarise the logs" }, { id: "N2", title: "Other", body: "@serverless is a word" }],
+  notes: [{ id: "N1", title: "Ideas", body: "@Server summarise the logs", tags: ["Suppliers"], snoozedUntil: "2099-01-02T03:04:05.000Z", links: [{ kind: "task", id: "T3", name: "Quarterly report" }] }, { id: "N2", title: "Other", body: "@serverless is a word" }],
   // 2.2 downloads: D2's "Mac" sends a checksum that doesn't match its bytes.
   documents: [{ id: "D1", number: "WF-D1A2B3", name: "readings.csv", version: 1, task: "Quarterly report", versions: [] },
-    { id: "D2", number: "WF-D2C4D6", name: "broken.bin", version: 1, task: "Quarterly report", versions: [] }],
+    { id: "D2", number: "WF-D2C4D6", name: "broken.bin", version: 1, task: "Quarterly report", versions: [] },
+    { id: "D3", number: "WF-D3E5F7", name: "scan.jpg", version: 1, noteID: "N1", versions: [] }],
   projects: [{ name: "Ops", isShared: false }, { name: "Client", isShared: true }] };
 module.exports = { snap, locked };
 // A test can serve a different snapshot by writing it to MOCK_STATE.snap
