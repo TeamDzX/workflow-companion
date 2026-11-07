@@ -8,20 +8,20 @@
     "source": "github"
   },
   "websiteUrl": "https://www.opticell-limited.com/companion",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@opticell/workflow-companion",
-      "version": "2.6.0",
+      "version": "2.7.0",
       "transport": {
         "type": "stdio"
       }
     },
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/TeamDzX/workflow-companion/releases/download/v2.6.0/WorkFlow.mcpb",
-      "fileSha256": "a72ec1d1316dabc869710bbbfae48f007c335e7a922595808d938676306a1f24",
+      "identifier": "https://github.com/TeamDzX/workflow-companion/releases/download/v2.7.0/WorkFlow.mcpb",
+      "fileSha256": "d0fda816b160c373bcbd9781e22476421105f52c01c47796ba3c4ebc298b069b",
       "transport": {
         "type": "stdio"
       }
