@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.7.0
+- **Follow-up drafts.** With Follow-Up Drafts set in WorkFlow 5.9 (Settings → Agent Bridge → Briefs, Check-ins & Approvals → Captured Email), a check-in drafts a short, polite follow-up when the user answered an email and has heard nothing back for that many days. Once per sent email, and never while a draft already waits. It waits on the task for Review & Send; nothing is sent.
+- **Suggested steps.** With Suggest Steps for Big Tasks on, a new task that's high priority or has long notes, and no checklist, gets its steps proposed as one checklist the user applies with a tap. Not for emails or the assistant's own tasks.
+- Reading a task made from email says who the user's reply went to and its subject, when it's waiting on an answer. Needs WorkFlow 5.9 or later.
+
 ## 2.6.0
 - **Email status.** `workflow_list` with `kind: "emails"` lists open tasks made from email, the longest without an answer first: no reply yet, reply drafted, awaiting theirs, or they replied. `days` narrows it to those waiting that long. Reading a task made from email says where it stands. Needs WorkFlow 5.8 or later.
 - **One-line summaries.** With One-Line Summaries on in WorkFlow 5.8, check-ins give a long captured email a status line saying what the sender wants.

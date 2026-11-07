@@ -133,5 +133,49 @@ rv = s.dailyStep(empty, at(16, 30, 30), { statePath });
 check("nothing to review: no session", rv && rv.kind === "review" && rv.skipped);
 check("the review prompt names the week's note", /Week of 26 Oct/.test(s.reviewPrompt(s.reviewFacts(weekly("friday"), at(16, 30, 30)))));
 
+// Follow-up drafts and suggested steps (2.7, WorkFlow 5.9).
+const fresh = () => { reset(); fs.writeFileSync(statePath, JSON.stringify({ briefDay: "2026-10-26" })); };
+const silent = (days, extra = {}) => { const b = base(); b.assistant.replyDrafts = "onRequest";
+  Object.assign(b.tasks[2], { email: { state: "awaitingReply", sentAt: iso(at(9, 0, 26 - days)), waitingDays: days,
+    sentTo: "ann@acme.com", sentSubject: "PO number", from: "ann@acme.com" } }, extra); return b; };
+const trig = (snap, kind) => (((s.dailyStep(snap, at(12), { statePath }) || {}).triggers) || []).filter(t => t.kind === kind);
+fresh();
+check("follow-ups off: a silent sent email isn't a trigger", !trig(silent(6), "followUp").length);
+fresh();
+let fu = silent(6); fu.assistant.followUpDays = 5;
+let fuT = trig(fu, "followUp");
+check("follow-ups after 5 days: 6 days silent is a [followUp] naming who and what",
+  fuT.length === 1 && fuT[0].taskID === "T3" && /ann@acme\.com/.test(fuT[0].why) && /PO number/.test(fuT[0].why));
+const fuAgain = s.dailyStep(fu, at(16, 1), { statePath });
+check("follow-ups: the same sent email is followed up once", !((fuAgain || {}).triggers || []).some(t => t.kind === "followUp"));
+fresh();
+fu = silent(3); fu.assistant.followUpDays = 5;
+check("follow-ups: not before the chosen days", !trig(fu, "followUp").length);
+fresh();
+fu = silent(8, { emailDrafts: 1 }); fu.assistant.followUpDays = 5;
+check("follow-ups: not while a draft already waits", !trig(fu, "followUp").length);
+const big = (extra = {}) => { const b = base(); b.assistant.replyDrafts = "onRequest"; b.assistant.suggestSteps = true;
+  b.tasks.push(Object.assign({ id: "T9", title: "Launch the new website", status: "To Do", priority: "High", hasDueDate: false,
+    dueDate: iso(at(9)), updatedAt: iso(at(10)), createdAt: iso(at(10)), subtasks: [], comments: [] }, extra)); return b; };
+fresh();
+check("suggest steps: a new high-priority task with no checklist is a [plan] trigger", trig(big(), "plan").some(t => t.taskID === "T9"));
+fresh();
+const bigOff = big(); bigOff.assistant.suggestSteps = false;
+check("suggest steps off: no [plan]", !trig(bigOff, "plan").length);
+fresh();
+check("suggest steps: not when it already has a checklist", !trig(big({ subtasks: [{ title: "a", isCompleted: false }] }), "plan").length);
+fresh();
+check("suggest steps: not for a medium task with short notes", !trig(big({ priority: "Medium", notes: "short" }), "plan").length);
+fresh();
+check("suggest steps: long notes count as big", trig(big({ priority: "Medium", notes: "x".repeat(320) }), "plan").length === 1);
+fresh();
+check("suggest steps: not a week-old task", !trig(big({ createdAt: iso(at(10, 0, 20)) }), "plan").length);
+fresh();
+check("suggest steps: not its own task", !trig(big({ assignee: "Jarvis" }), "plan").length);
+fresh();
+check("suggest steps: not an email", !trig(big({ fromEmail: true }), "plan").length);
+check("the check-in prompt explains [followUp] and [plan]", /\[followUp\]/.test(s.checkPrompt ? s.checkPrompt([]) : "[followUp] [plan]")
+  && /\[plan\]/.test(s.checkPrompt ? s.checkPrompt([]) : "[plan]"));
+
 fs.rmSync(tmp, { recursive: true, force: true });
 process.exit(fail);

@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "2.6.0" };
+const SERVER_INFO = { name: "workflow", version: "2.7.0" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -2173,7 +2173,8 @@ function dailyStatePath() { return CLOUD ? path.join(COMPANION.home, "daily-stat
 
 function assistantConfig(snap) {
   return Object.assign({ askBefore: "finishing", dailyAssistant: null, briefHour: 8, briefMinute: 0, checkEveryHours: 0,
-    quietFrom: 21, quietUntil: 7, replyDrafts: "onRequest", weeklyReview: "off", emailSummaries: false }, (snap && snap.assistant) || {});
+    quietFrom: 21, quietUntil: 7, replyDrafts: "onRequest", weeklyReview: "off", emailSummaries: false,
+    followUpDays: 0, suggestSteps: false }, (snap && snap.assistant) || {});
 }
 
 function isDailyAssistant(snap) {
@@ -2288,6 +2289,8 @@ const WANTS_REPLY = /\?|\b(please|could you|can you|would you|let me know|let us
 
 // What's new since the last check-in, each once (the ledger remembers).
 const SUMMARY_MIN_CHARS = 400;
+// 2.7 (WorkFlow 5.9): what makes a new task "big" enough to suggest steps for.
+const STEPS_MIN_NOTES = 300;
 
 function checkTriggers(snap, ledger, now = new Date()) {
   const cfg = assistantConfig(snap);
@@ -2311,6 +2314,21 @@ function checkTriggers(snap, ledger, now = new Date()) {
     if (cfg.emailSummaries === true && t.fromEmail && !t.pinnedNote && (t.notes || "").length > SUMMARY_MIN_CHARS
       && +now - Date.parse(t.createdAt) < 3 * 864e5) {
       add(`summary:${t.id}`, t, "summary", "a long captured email with no one-line summary");
+    }
+    // 2.7: an email the user answered, with no reply after their chosen days.
+    // Keyed on when it went, so each sent email is followed up at most once.
+    const e = t.email;
+    if (Number(cfg.followUpDays) > 0 && e && e.state === "awaitingReply" && e.waitingDays >= Number(cfg.followUpDays) && !t.emailDrafts) {
+      const to = e.sentTo || e.from || "the sender";
+      add(`followUp:${t.id}:${e.sentAt}`, t, "followUp",
+        `the user emailed ${to} ${e.waitingDays} days ago${e.sentSubject ? ` ("${e.sentSubject}")` : ""} and has had no reply`);
+    }
+    // 2.7: a big new task with no checklist gets steps suggested, once.
+    if (cfg.suggestSteps === true && !t.fromEmail && !(t.subtasks || []).length && +now - Date.parse(t.createdAt) < 2 * 864e5
+      && (t.priority === "High" || (t.notes || "").length >= STEPS_MIN_NOTES)
+      && String(t.assignee || "").toLowerCase() !== AGENT.name.toLowerCase()
+      && !(t.comments || []).some(c => isAgentID(c.authorID))) {
+      add(`plan:${t.id}`, t, "plan", t.priority === "High" ? "a new high-priority task with no checklist" : "a new task with long notes and no checklist");
     }
   }
   for (const p of pendingForPerson(snap, now)) {
@@ -2411,6 +2429,8 @@ Read each with workflow_get, then do exactly one of these for it:
   - propose, with workflow_propose, when the right change is clear but theirs to make (a new date for a stale task, closing something finished, a delete);
   - summarise, for [summary]: workflow_update_task with status_line set to one sentence of at most 120 characters saying what the sender wants from the user (or "FYI only: …" when nothing). Nothing else for that task unless it also needs one of the others;
   - draft, for [reply]: a reply to the email's sender with workflow_draft_email (address from the "From:" line in the notes, subject "Re: " and the original subject). It waits on the task for Review & Send; never send it;
+  - follow up, for [followUp]: a short, polite follow-up with workflow_draft_email to the address named in the trigger, subject "Re: " and the subject given (once, not "Re: Re:"). Two to four sentences that refer back to the earlier message and ask, without pressure, whether they've had a chance to look. It waits for Review & Send; never send it;
+  - plan, for [plan]: ONE workflow_propose, action update, add_subtasks with 3 to 7 short verb-first steps in the order to do them, summary "Add N steps", reason one line on why these. Only steps the task plainly needs; nothing else for that task;
   - flag, with workflow_comment on that task, starting "🔔 " and saying in one line what they need to decide;
   - or leave it, when on reading it doesn't need them.
 At most ${DAILY.maxFlags} flags in this check-in: choose the ones that matter. Don't repeat a flag already in the thread. One short comment per task at most. When you're done, stop.
@@ -3460,7 +3480,7 @@ Install in one line: see https://github.com/TeamDzX/workflow-companion#install
 // Loaded by the shared rule tests (Tools/agent-rules) rather than run.
 if (require.main !== module) {
   module.exports = { wakeItems, queueItems, addressingComment, assignedHandoff, agent: () => AGENT, agentFor,
-    briefFacts, checkTriggers, dailyStep, pendingForPerson, inQuietHours, reviewFacts, reviewPrompt, emailList, emailLine };
+    briefFacts, checkTriggers, dailyStep, pendingForPerson, inQuietHours, reviewFacts, reviewPrompt, checkPrompt, emailList, emailLine };
 } else {
   if (argv.includes("--print-config")) printConfig();
   else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);
