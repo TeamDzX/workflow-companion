@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "2.5.0" };
+const SERVER_INFO = { name: "workflow", version: "2.6.0" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -639,6 +639,18 @@ function local(iso) {
 
 // ------------------------------------------------------------------ views
 
+// Open email tasks, unanswered and longest-waiting first; replied ones last.
+function emailList(snap, a = {}) {
+  const rank = { unanswered: 0, drafted: 1, awaitingReply: 2, replied: 3 };
+  const min = a.days > 0 ? a.days : 0;
+  let rows = (snap.tasks || []).filter(t => t.email && !t.isHidden && t.status !== "Completed"
+    && (!min || (t.email.state !== "replied" && (t.email.waitingDays || 0) >= min)));
+  rows.sort((x, y) => (rank[x.email.state] ?? 9) - (rank[y.email.state] ?? 9) || (y.email.waitingDays || 0) - (x.email.waitingDays || 0));
+  if (a.limit > 0) rows = rows.slice(0, a.limit);
+  if (!rows.length) return min ? `no email tasks waiting ${min}+ days` : "no open email tasks";
+  return rows.map(t => `${t.title}  ·  ${emailLine(t.email)}  ·  id ${t.id}`).join("\n");
+}
+
 function taskLine(t) {
   const due = t.dueDate ? ` due ${local(t.dueDate).split(",")[0]}` : "";
   const proj = t.project ? ` [${t.project}]` : "";
@@ -646,8 +658,17 @@ function taskLine(t) {
   return `${t.status.padEnd(12)} ${t.title}${proj}${due}${who}`;
 }
 
+// 5.8 (WorkFlow): where an email task stands with its reply.
+const EMAIL_STATES = { unanswered: "no reply yet", drafted: "reply drafted, not sent", awaitingReply: "reply sent, awaiting theirs", replied: "they replied" };
+function emailLine(e) {
+  if (!e) return "";
+  const days = e.waitingDays != null && e.state !== "replied" ? `, ${e.waitingDays} day${e.waitingDays === 1 ? "" : "s"}` : "";
+  return `${EMAIL_STATES[e.state] || e.state}${days}${e.from ? ` (from ${e.from})` : ""}`;
+}
+
 function showTask(t) {
   const lines = [`${t.title}  (${t.status}, ${t.priority})`, `id ${t.id}`];
+  if (t.email) lines.push(`email: ${emailLine(t.email)}`);
   if (t.project) lines.push(`project: ${t.project}`);
   if (t.assignee) lines.push(`assignee: ${t.assignee}`);
   if (t.dueDate) lines.push(`due: ${local(t.dueDate)}`);
@@ -1363,9 +1384,10 @@ const TOOLS = [
   },
   {
     name: "workflow_list",
-    description: "List or search. kind: tasks (default; open ones unless all), notes (the Notepad; '*' marks ones addressed to you), projects (status, dates, progress, health and why), documents (every file; query also matches WF-numbers, profiles and the text inside PDFs and scans), comments (what people wrote since a time, default the last 24 h, not your own). query, project and status narrow tasks, notes and documents.",
+    description: "List or search. kind: tasks (default; open ones unless all), emails (open tasks made from email, the longest without an answer first: no reply yet, reply drafted, awaiting theirs, or they replied; days narrows to those waiting at least that many days), notes (the Notepad; '*' marks ones addressed to you), projects (status, dates, progress, health and why), documents (every file; query also matches WF-numbers, profiles and the text inside PDFs and scans), comments (what people wrote since a time, default the last 24 h, not your own). query, project and status narrow tasks, notes and documents.",
     inputSchema: { type: "object", properties: {
-      kind: { type: "string", enum: ["tasks", "notes", "projects", "documents", "comments"] },
+      kind: { type: "string", enum: ["tasks", "emails", "notes", "projects", "documents", "comments"] },
+      days: { type: "number", description: "emails: waiting at least this many days" },
       query: { type: "string" }, project: { type: "string" }, status: { type: "string" },
       type: { type: "string", description: "documents: Contract, Invoice, Report…" },
       all: { type: "boolean", description: "include completed, hidden or archived" },
@@ -1383,6 +1405,7 @@ const TOOLS = [
           && has(t.title, t.notes, (t.tags || []).join(" "), t.assignee)));
         return rows.length ? rows.map(taskLine).join("\n") : "no tasks match";
       }
+      if (kind === "emails") return emailList(snapshot(), a);
       if (kind === "notes") {
         const rows = cap((snapshot().notes || []).filter(n => (a.all || !n.isArchived) && has(n.title, n.body)));
         if (!rows.length) return "no notes match";
@@ -1391,7 +1414,7 @@ const TOOLS = [
       if (kind === "projects") return op("workflow_list_projects", a);
       if (kind === "documents") return op("workflow_list_documents", Object.assign({}, a, { limit: a.limit || 40 }));
       if (kind === "comments") return op("workflow_poll_comments", a);
-      throw new Error(`kind is one of tasks, notes, projects, documents, comments.`);
+      throw new Error(`kind is one of tasks, emails, notes, projects, documents, comments.`);
     },
   },
   {
@@ -2150,7 +2173,7 @@ function dailyStatePath() { return CLOUD ? path.join(COMPANION.home, "daily-stat
 
 function assistantConfig(snap) {
   return Object.assign({ askBefore: "finishing", dailyAssistant: null, briefHour: 8, briefMinute: 0, checkEveryHours: 0,
-    quietFrom: 21, quietUntil: 7, replyDrafts: "onRequest", weeklyReview: "off" }, (snap && snap.assistant) || {});
+    quietFrom: 21, quietUntil: 7, replyDrafts: "onRequest", weeklyReview: "off", emailSummaries: false }, (snap && snap.assistant) || {});
 }
 
 function isDailyAssistant(snap) {
@@ -2264,6 +2287,8 @@ function reviewWindow(cfg, now) {
 const WANTS_REPLY = /\?|\b(please|could you|can you|would you|let me know|let us know|get back to|reply|respond|confirm|are you able|do you have)\b/i;
 
 // What's new since the last check-in, each once (the ledger remembers).
+const SUMMARY_MIN_CHARS = 400;
+
 function checkTriggers(snap, ledger, now = new Date()) {
   const cfg = assistantConfig(snap);
   const today = startOfDay(now);
@@ -2281,6 +2306,11 @@ function checkTriggers(snap, ledger, now = new Date()) {
     if (cfg.replyDrafts === "automatic" && t.fromEmail && !t.emailDrafts && +now - Date.parse(t.createdAt) < 3 * 864e5
       && WANTS_REPLY.test(t.notes || "") && !(t.comments || []).some(c => isAgentID(c.authorID))) {
       add(`reply:${t.id}`, t, "reply", "a captured email that asks something, with no reply drafted");
+    }
+    // 5.8: a long captured email gets a one-line summary as its status line.
+    if (cfg.emailSummaries === true && t.fromEmail && !t.pinnedNote && (t.notes || "").length > SUMMARY_MIN_CHARS
+      && +now - Date.parse(t.createdAt) < 3 * 864e5) {
+      add(`summary:${t.id}`, t, "summary", "a long captured email with no one-line summary");
     }
   }
   for (const p of pendingForPerson(snap, now)) {
@@ -2379,6 +2409,7 @@ ${rules ? `\nTheir HOUSE RULES:\n${rules}\n` : ""}
 Read each with workflow_get, then do exactly one of these for it:
   - act, when it's plainly yours to do and small (within the house rules; their Ask before setting may turn a change into a proposal by itself);
   - propose, with workflow_propose, when the right change is clear but theirs to make (a new date for a stale task, closing something finished, a delete);
+  - summarise, for [summary]: workflow_update_task with status_line set to one sentence of at most 120 characters saying what the sender wants from the user (or "FYI only: …" when nothing). Nothing else for that task unless it also needs one of the others;
   - draft, for [reply]: a reply to the email's sender with workflow_draft_email (address from the "From:" line in the notes, subject "Re: " and the original subject). It waits on the task for Review & Send; never send it;
   - flag, with workflow_comment on that task, starting "🔔 " and saying in one line what they need to decide;
   - or leave it, when on reading it doesn't need them.
@@ -3429,7 +3460,7 @@ Install in one line: see https://github.com/TeamDzX/workflow-companion#install
 // Loaded by the shared rule tests (Tools/agent-rules) rather than run.
 if (require.main !== module) {
   module.exports = { wakeItems, queueItems, addressingComment, assignedHandoff, agent: () => AGENT, agentFor,
-    briefFacts, checkTriggers, dailyStep, pendingForPerson, inQuietHours, reviewFacts, reviewPrompt };
+    briefFacts, checkTriggers, dailyStep, pendingForPerson, inQuietHours, reviewFacts, reviewPrompt, emailList, emailLine };
 } else {
   if (argv.includes("--print-config")) printConfig();
   else if (argv.includes("--help") || verb === "help") process.stdout.write(HELP);

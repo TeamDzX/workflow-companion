@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.6.0
+- **Email status.** `workflow_list` with `kind: "emails"` lists open tasks made from email, the longest without an answer first: no reply yet, reply drafted, awaiting theirs, or they replied. `days` narrows it to those waiting that long. Reading a task made from email says where it stands. Needs WorkFlow 5.8 or later.
+- **One-line summaries.** With One-Line Summaries on in WorkFlow 5.8, check-ins give a long captured email a status line saying what the sender wants.
+
 ## 2.5.0
 - **Notes show what's attached to them.** Reading a note now lists its files by
   WF-number, so an assistant can fetch one with `workflow_download`, as well as

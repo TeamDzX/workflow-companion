@@ -72,6 +72,42 @@ const answered = base();
 answered.tasks[3].comments.push({ id: "c2", author: "Alex", authorID: "_alex", text: "✓ Applied P7K2", timestamp: iso(at(10, 0, 24)) });
 check("an applied proposal no longer waits", !s.pendingForPerson(answered, at(12)).some(p => p.code === "P7K2"));
 
+// One-line email summaries (2.6, WorkFlow 5.8).
+const longEmail = () => { const b = base(); b.assistant.replyDrafts = "onRequest";
+  b.tasks[2].notes = "From: ann@acme.com\n" + "Lots of detail about the order. ".repeat(20); return b; };
+reset();
+fs.writeFileSync(statePath, JSON.stringify({ briefDay: "2026-10-26" }));
+check("summaries off: a long email isn't a trigger", !s.dailyStep(longEmail(), at(12), { statePath }).triggers.some(t => t.kind === "summary"));
+reset();
+fs.writeFileSync(statePath, JSON.stringify({ briefDay: "2026-10-26" }));
+const sumOn = longEmail(); sumOn.assistant.emailSummaries = true;
+check("summaries on: a long email with no status line is a [summary] trigger",
+  s.dailyStep(sumOn, at(12), { statePath }).triggers.some(t => t.kind === "summary" && t.taskID === "T3"));
+reset();
+fs.writeFileSync(statePath, JSON.stringify({ briefDay: "2026-10-26" }));
+const sumDone = longEmail(); sumDone.assistant.emailSummaries = true; sumDone.tasks[2].pinnedNote = "Ann wants the PO number.";
+check("summaries on: one that already has a status line is left alone",
+  !((s.dailyStep(sumDone, at(12), { statePath }) || {}).triggers || []).some(t => t.kind === "summary"));
+reset();
+fs.writeFileSync(statePath, JSON.stringify({ briefDay: "2026-10-26" }));
+const sumShort = base(); sumShort.assistant.emailSummaries = true;
+check("summaries on: a short email needs none", !s.dailyStep(sumShort, at(12), { statePath }).triggers.some(t => t.kind === "summary"));
+
+// Email status list (2.6, WorkFlow 5.8).
+const mail = { tasks: [
+  { id: "E1", title: "Quote for chairs", status: "To Do", email: { state: "awaitingReply", waitingDays: 5, from: "jane@acme.com" } },
+  { id: "E2", title: "Invoice query", status: "To Do", email: { state: "unanswered", waitingDays: 2 } },
+  { id: "E3", title: "Thanks!", status: "To Do", email: { state: "replied", repliedAt: "2026-10-25T10:00:00Z" } },
+  { id: "E4", title: "Old order", status: "Completed", email: { state: "unanswered", waitingDays: 9 } },
+  { id: "E5", title: "Plain task", status: "To Do" } ] };
+const listed = s.emailList(mail).split("\n");
+check("emails: open email tasks only, unanswered first, replied last",
+  listed.length === 3 && listed[0].startsWith("Invoice query") && listed[1].startsWith("Quote for chairs") && listed[2].startsWith("Thanks!"));
+check("emails: the line says the state, the days and who from", listed[1].includes("reply sent, awaiting theirs, 5 days (from jane@acme.com)"));
+const waiting = s.emailList(mail, { days: 3 }).split("\n");
+check("emails: days narrows to those waiting that long, never replied ones", waiting.length === 1 && waiting[0].startsWith("Quote for chairs"));
+check("emails: nothing waiting says so", s.emailList(mail, { days: 30 }) === "no email tasks waiting 30+ days");
+
 // Weekly review (2.3, WorkFlow 5.7). 26 Oct 2026 is a Monday, 30 Oct a Friday.
 const weekly = when => { const b = base(); b.assistant.weeklyReview = when; b.assistant.checkEveryHours = 0;
   b.tasks.push({ id: "T5", title: "Ship 5.6.2", status: "Completed", completedDate: iso(at(15, 0, 28)), hasDueDate: false, dueDate: iso(at(9)), updatedAt: iso(at(15, 0, 28)), createdAt: iso(at(9, 0, 20)), comments: [] });
