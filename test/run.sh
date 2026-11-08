@@ -451,6 +451,7 @@ mkdir -p "$W/dl"
 node drive.js '[["workflow_download",{"document":"WF-D1A2B3","save_to":"'"$W"'/dl"}],["workflow_download",{"document":"readings.csv","save_to":"'"$W"'/dl"}],["workflow_download",{"document":"broken.bin","save_to":"'"$W"'/dl"}]]' > "$W/dl.out"
 kill $MAC
 check "a download arrives, checked, under its own name" "grep -q '#1 ok  Saved WF-D1A2B3 “readings.csv” (26 bytes, SHA-256 checked)' $W/dl.out && [ \"\$(cat $W/dl/readings.csv)\" = \"\$(printf 'date,temp\n2026-10-27,14.5')\" ]"
+check "a file is found by its name with the extension, which WorkFlow keeps apart (2.7.1)" "grep -q '#2 ok  Saved WF-D1A2B3' $W/dl.out"
 check "a second download never overwrites the first" "[ -f '$W/dl/readings (2).csv' ]"
 check "a damaged download is refused and not saved" "grep -q '#3 ERR The file arrived damaged' $W/dl.out && [ ! -f $W/dl/broken.bin ]"
 check "downloads are deleted from iCloud once collected" "[ \"\$(st 'Object.keys(s.records).filter(k=>k.startsWith(\"download-\")).length')\" = 0 ]"

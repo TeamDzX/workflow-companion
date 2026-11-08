@@ -35,7 +35,8 @@ const snap = { generatedAt: new Date().toISOString(),
   ],
   notes: [{ id: "N1", title: "Ideas", body: "@Server summarise the logs", tags: ["Suppliers"], snoozedUntil: "2099-01-02T03:04:05.000Z", links: [{ kind: "task", id: "T3", name: "Quarterly report" }] }, { id: "N2", title: "Other", body: "@serverless is a word" }],
   // 2.2 downloads: D2's "Mac" sends a checksum that doesn't match its bytes.
-  documents: [{ id: "D1", number: "WF-D1A2B3", name: "readings.csv", version: 1, task: "Quarterly report", versions: [] },
+  // D1 has WorkFlow's real shape: the name without its extension (2.7.1).
+  documents: [{ id: "D1", number: "WF-D1A2B3", name: "readings", fileType: "csv", version: 1, task: "Quarterly report", versions: [] },
     { id: "D2", number: "WF-D2C4D6", name: "broken.bin", version: 1, task: "Quarterly report", versions: [] },
     { id: "D3", number: "WF-D3E5F7", name: "scan.jpg", version: 1, noteID: "N1", versions: [] }],
   projects: [{ name: "Ops", isShared: false }, { name: "Client", isShared: true }] };

@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.7.1
+- **Downloading a file by its name works with the extension.** WorkFlow keeps a file's name apart from its type ("report" and "pdf"), so asking `workflow_download` (or `workflow_get_document`) for "report.pdf" found nothing, and a document could only be fetched by its WF-number. Both forms now match.
+
 ## 2.7.0
 - **Follow-up drafts.** With Follow-Up Drafts set in WorkFlow 5.9 (Settings → Agent Bridge → Briefs, Check-ins & Approvals → Captured Email), a check-in drafts a short, polite follow-up when the user answered an email and has heard nothing back for that many days. Once per sent email, and never while a draft already waits. It waits on the task for Review & Send; nothing is sent.
 - **Suggested steps.** With Suggest Steps for Big Tasks on, a new task that's high priority or has long notes, and no checklist, gets its steps proposed as one checklist the user applies with a tap. Not for emails or the assistant's own tasks.

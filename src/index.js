@@ -27,7 +27,7 @@ const path = require("path");
 const os = require("os");
 
 const PROTOCOL_VERSION = "2024-11-05";
-const SERVER_INFO = { name: "workflow", version: "2.7.0" };
+const SERVER_INFO = { name: "workflow", version: "2.7.1" };
 // Who the agent is in WorkFlow: the assignee its queue follows, the @name
 // that calls it, the signature on what it writes. On the Mac it's Claude.
 // A companion goes by the name chosen at setup (default "Companion"), so a
@@ -573,11 +573,17 @@ function findDocument(needle) {
   const docs = snapshot().documents;
   if (!docs) throw new Error("No documents in the snapshot — this needs WorkFlow 5.0 with the bridge on.");
   const n = String(needle).trim().toLowerCase();
+  // WorkFlow keeps the display name without its extension ("report", type
+  // "pdf"), but the file is "report.pdf" everywhere else, so match both.
+  const names = d => {
+    const name = (d.name || "").toLowerCase(), ext = (d.fileType || "").toLowerCase();
+    return ext && !name.endsWith(`.${ext}`) ? [name, `${name}.${ext}`] : [name];
+  };
   const hit = docs.find(d => d.id.toLowerCase() === n || (d.versions || []).some(v => v.id.toLowerCase() === n))
     || docs.find(d => (d.number || "").toLowerCase() === n)
-    || docs.find(d => (d.name || "").toLowerCase() === n);
+    || docs.find(d => names(d).includes(n));
   if (hit) return hit;
-  const partial = docs.filter(d => (d.name || "").toLowerCase().includes(n));
+  const partial = docs.filter(d => names(d).some(x => x.includes(n)));
   if (partial.length === 1) return partial[0];
   if (partial.length > 1) throw new Error(`"${needle}" matches ${partial.length} documents: ${partial.slice(0, 5).map(d => `${d.number} “${d.name}”`).join(", ")} — use a WF-number.`);
   throw new Error(`No document matches "${needle}".`);
